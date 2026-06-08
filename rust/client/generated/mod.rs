@@ -62,6 +62,8 @@ pub enum Reducer {
     },
     PlaceObject {
         kind: String,
+        target_x: i32,
+        target_y: i32,
     },
     SendChat {
         body: String,
@@ -104,9 +106,15 @@ impl __sdk::Reducer for Reducer {
                     dy: dy.clone(),
                 })
             }
-            Reducer::PlaceObject { kind } => {
-                __sats::bsatn::to_vec(&place_object_reducer::PlaceObjectArgs { kind: kind.clone() })
-            }
+            Reducer::PlaceObject {
+                kind,
+                target_x,
+                target_y,
+            } => __sats::bsatn::to_vec(&place_object_reducer::PlaceObjectArgs {
+                kind: kind.clone(),
+                target_x: target_x.clone(),
+                target_y: target_y.clone(),
+            }),
             Reducer::SendChat { body } => {
                 __sats::bsatn::to_vec(&send_chat_reducer::SendChatArgs { body: body.clone() })
             }

@@ -8,11 +8,17 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 #[sats(crate = __lib)]
 pub(super) struct PlaceObjectArgs {
     pub kind: String,
+    pub target_x: i32,
+    pub target_y: i32,
 }
 
 impl From<PlaceObjectArgs> for super::Reducer {
     fn from(args: PlaceObjectArgs) -> Self {
-        Self::PlaceObject { kind: args.kind }
+        Self::PlaceObject {
+            kind: args.kind,
+            target_x: args.target_x,
+            target_y: args.target_y,
+        }
     }
 }
 
@@ -31,8 +37,8 @@ pub trait place_object {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`place_object:place_object_then`] to run a callback after the reducer completes.
-    fn place_object(&self, kind: String) -> __sdk::Result<()> {
-        self.place_object_then(kind, |_, _| {})
+    fn place_object(&self, kind: String, target_x: i32, target_y: i32) -> __sdk::Result<()> {
+        self.place_object_then(kind, target_x, target_y, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `place_object` to run as soon as possible,
@@ -44,6 +50,8 @@ pub trait place_object {
     fn place_object_then(
         &self,
         kind: String,
+        target_x: i32,
+        target_y: i32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -55,12 +63,20 @@ impl place_object for super::RemoteReducers {
     fn place_object_then(
         &self,
         kind: String,
+        target_x: i32,
+        target_y: i32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(PlaceObjectArgs { kind }, callback)
+        self.imp.invoke_reducer_with_callback(
+            PlaceObjectArgs {
+                kind,
+                target_x,
+                target_y,
+            },
+            callback,
+        )
     }
 }

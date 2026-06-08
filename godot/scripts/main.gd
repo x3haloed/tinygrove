@@ -30,6 +30,9 @@ const AGENT_ACTION_POLL_MSEC := 15
 const AGENT_DEFAULT_SCREENSHOT_MAX := Vector2i(1024, 768)
 const AGENT_BIGGER_SCREENSHOT_MAX := Vector2i(1280, 720)
 const AGENT_MAX_SCREENSHOT_MAX := Vector2i(1920, 1080)
+const PLACE_RADIUS_TILES := 8
+const PLACE_RADIUS_PIXELS := TILE_SIZE * PLACE_RADIUS_TILES
+const PLACE_PREVIEW_SNAP := TILE_SIZE
 
 @onready var world: Node2D = $World
 @onready var status_label: Label = $Hud/VBox/Status
@@ -49,6 +52,11 @@ var chat_bubbles_by_sender: Dictionary = {}
 var local_identity := ""
 var camera_position := Vector2.ZERO
 var camera_initialized := false
+var place_mode := false
+var place_kind := "flower"
+var place_target := Vector2.ZERO
+var place_target_clamped := Vector2.ZERO
+var place_target_valid := false
 var move_elapsed := 0.0
 var frame := 0
 var smoke_enabled := false
@@ -108,9 +116,26 @@ func _process(delta: float) -> void:
 	_update_plots()
 	_update_objects()
 	_update_camera(delta)
+	_update_place_preview()
 	_poll_agent_http()
 	_handle_interaction()
 	_handle_movement(delta)
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		_update_place_preview()
+	if event is InputEventMouseButton and event.pressed:
+		if place_mode and event.button_index == MOUSE_BUTTON_LEFT:
+			_attempt_place_selected()
+		elif place_mode and event.button_index == MOUSE_BUTTON_RIGHT:
+			_cancel_place_mode()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F:
+			_toggle_place_mode("flower")
+		elif event.keycode == KEY_B:
+			_toggle_place_mode("button")
+		elif event.keycode == KEY_ESCAPE and place_mode:
+			_cancel_place_mode()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
@@ -145,16 +170,72 @@ func _handle_movement(delta: float) -> void:
 func _handle_interaction() -> void:
 	if Input.is_action_just_pressed("interact"):
 		client.interact_near()
-	elif Input.is_action_just_pressed("place_flower"):
-		client.place_object("flower")
-	elif Input.is_action_just_pressed("place_button"):
-		client.place_object("button")
+
+func _toggle_place_mode(kind: String) -> void:
+	if place_mode and place_kind == kind:
+		_cancel_place_mode()
+		return
+	place_mode = true
+	place_kind = kind
+	_update_place_preview()
+	queue_redraw()
+
+func _cancel_place_mode() -> void:
+	place_mode = false
+	place_target_valid = false
+	queue_redraw()
+
+func _update_place_preview() -> void:
+	if not place_mode or local_identity.is_empty() or not avatars.has(local_identity):
+		place_target_valid = false
+		queue_redraw()
+		return
+
+	var local_avatar: AvatarNode = avatars[local_identity]
+	var cursor_world := _screen_to_world(get_viewport().get_mouse_position())
+	var clamped := _clamp_to_place_radius(local_avatar.world_target, cursor_world)
+	place_target = cursor_world
+	place_target_clamped = _snap_to_tile_center(clamped)
+	place_target_valid = _is_place_target_valid(local_avatar.world_target, place_target_clamped)
+	queue_redraw()
+
+func _attempt_place_selected() -> void:
+	if not place_mode:
+		return
+	if not place_target_valid:
+		return
+	var sent: bool = client.place_object(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
+	if sent:
+		_cancel_place_mode()
+
+func _screen_to_world(screen_point: Vector2) -> Vector2:
+	return screen_point - world.position
+
+func _world_to_screen(world_point: Vector2) -> Vector2:
+	return world.position + world_point
+
+func _snap_to_tile_center(world_point: Vector2) -> Vector2:
+	return Vector2(
+		floor(world_point.x / TILE_SIZE) * TILE_SIZE + TILE_SIZE * 0.5,
+		floor(world_point.y / TILE_SIZE) * TILE_SIZE + TILE_SIZE * 0.5,
+	)
+
+func _clamp_to_place_radius(origin: Vector2, target: Vector2) -> Vector2:
+	var delta := target - origin
+	if delta.length() <= PLACE_RADIUS_PIXELS:
+		return target
+	return origin + delta.normalized() * PLACE_RADIUS_PIXELS
+
+func _is_place_target_valid(origin: Vector2, target: Vector2) -> bool:
+	return origin.distance_to(target) <= PLACE_RADIUS_PIXELS + 0.01
 
 func _update_status() -> void:
 	var text: String = client.status()
 	var error: String = client.last_error()
 	if not error.is_empty():
 		text += " | " + _short_error(error)
+	if place_mode:
+		text += " | placing %s within %d tiles" % [place_kind, PLACE_RADIUS_TILES]
 	status_label.text = text
 
 func _update_world() -> void:
@@ -267,6 +348,7 @@ func _update_objects() -> void:
 		agent_object_state[id] = object_state
 		object.position = object_position
 		object.set_meta("kind", kind)
+		object.set_meta("text", str(row.get("text", "")))
 		object.set_meta("state", state)
 		object.z_index = int(object.position.y) - 1
 		object.queue_redraw()
@@ -394,6 +476,24 @@ func _update_camera(delta: float) -> void:
 
 func _apply_camera() -> void:
 	world.position = (size * 0.5 - camera_position).round()
+
+func _draw() -> void:
+	if not place_mode:
+		return
+	var local_avatar: AvatarNode = avatars.get(local_identity, null)
+	if local_avatar == null:
+		return
+
+	var origin_screen := _world_to_screen(local_avatar.world_target)
+	var target_screen := _world_to_screen(place_target_clamped)
+	var valid_color := Color(0.98, 0.88, 0.52, 0.95)
+	var invalid_color := Color(0.94, 0.30, 0.24, 0.85)
+	var preview_color := valid_color if place_target_valid else invalid_color
+	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.10), 1.0, true)
+	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, preview_color, 2.0, false)
+	draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+	draw_line(origin_screen, target_screen, preview_color, 1.0)
+	draw_string(ThemeDB.fallback_font, origin_screen + Vector2(16, -12), "place %s" % place_kind, HORIZONTAL_ALIGNMENT_LEFT, 160, 12, preview_color)
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
@@ -653,7 +753,7 @@ func _agent_help() -> Dictionary:
 			"POST /login - join gently; JSON body may include display_name",
 			"POST /move - move by direction and optional steps",
 			"POST /chat - send a chat message",
-			"POST /place - place flower, button, sign, or rock in front of you",
+			"POST /place - place flower, button, sign, or rock at an explicit target within the placement radius",
 			"POST /interact - interact with the nearby object you face",
 			"GET /screenshot - JPEG, downsampled to fit 1024x768",
 			"GET /screenshot?size=bigger - PNG, downsampled to fit 1280x720",
@@ -662,6 +762,7 @@ func _agent_help() -> Dictionary:
 		"notes": [
 			"No stream endpoint exists yet.",
 			"The snapshot describes only what is inside the current camera view.",
+			"Placement is only valid within a fixed radius of your current position; the server rejects targets outside that circle.",
 			"Action endpoints include a delta and advance your cursor.",
 			"If a response says you are not logged in, call POST /login and retry after a moment.",
 		],
@@ -732,6 +833,11 @@ func _agent_snapshot(advance_cursor := false) -> Dictionary:
 	var visible_plots := _agent_visible_plots(view_rect)
 	var visible_objects := _agent_visible_objects(view_rect, local_position)
 	var visible_bubbles := _agent_visible_bubbles(view_rect)
+	var placement := {
+		"radius_tiles": PLACE_RADIUS_TILES,
+		"radius_pixels": PLACE_RADIUS_PIXELS,
+		"note": "Targets outside this radius are invalid and will be rejected by the server.",
+	}
 	var hints := []
 	if not logged_in:
 		hints.append("You are not logged in. Call POST /login with JSON like {\"display_name\":\"Agent\"}, then retry GET /snapshot.")
@@ -749,6 +855,7 @@ func _agent_snapshot(advance_cursor := false) -> Dictionary:
 			"agent_registry_path": agent_registry_path,
 		},
 		"you": _agent_you_dictionary(local_avatar),
+		"placement": placement,
 		"camera": {
 			"center": _agent_point(camera_position),
 			"view_rect": _agent_rect(view_rect),
@@ -831,15 +938,38 @@ func _agent_place(body: String, query: Dictionary) -> Dictionary:
 		return result
 	if kind.is_empty():
 		kind = "flower"
+	var target := _agent_place_target(query, payload)
+	if target.is_empty():
+		result["ok"] = false
+		result["message"] = "Provide a target within %d tiles of your current position, for example POST /place with {\"kind\":\"flower\",\"tile_x\":12,\"tile_y\":7}." % PLACE_RADIUS_TILES
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
 
-	var sent: bool = client.place_object(kind)
+	var sent: bool = client.place_object(kind, int(target["x"]), int(target["y"]))
 	_agent_settle_after_action()
 	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
 	result["ok"] = sent
-	result["message"] = "Placed %s in front of you." % kind if sent and int(delta["visible_event_count"]) > 0 else "Place request was sent, but no visible object delta arrived. The server may have rejected it, or the target may be outside the camera view." if sent else "Place request could not be sent. You may be outside your plot or the target tile may already be occupied."
+	result["message"] = "Placed %s at %s." % [kind, _agent_point_text(Vector2(float(target["x"]), float(target["y"])))] if sent and int(delta["visible_event_count"]) > 0 else "Place request was sent, but no visible object delta arrived. The server may have rejected it, the target may be outside your plot, or the target may be outside the placement radius." if sent else "Place request could not be sent. Check the placement radius and plot boundaries."
 	result["kind"] = kind
+	result["target"] = target
 	result["delta"] = delta
 	return result
+
+func _agent_place_target(query: Dictionary, payload: Dictionary) -> Dictionary:
+	var raw_x: Variant = query.get("x", payload.get("x", null))
+	var raw_y: Variant = query.get("y", payload.get("y", null))
+	if raw_x != null and raw_y != null:
+		return {"x": int(raw_x), "y": int(raw_y)}
+
+	var raw_tile_x: Variant = query.get("tile_x", payload.get("tile_x", null))
+	var raw_tile_y: Variant = query.get("tile_y", payload.get("tile_y", null))
+	if raw_tile_x != null and raw_tile_y != null:
+		return {
+			"x": int(raw_tile_x) * TILE_SIZE + int(TILE_SIZE * 0.5),
+			"y": int(raw_tile_y) * TILE_SIZE + int(TILE_SIZE * 0.5),
+		}
+
+	return {}
 
 func _agent_interact(query: Dictionary) -> Dictionary:
 	var result := _agent_action_base("interact")
@@ -970,6 +1100,7 @@ func _agent_visible_objects(view_rect: Rect2, local_position: Vector2) -> Dictio
 		objects.append({
 			"id": id,
 			"kind": kind,
+			"text": str(object.get_meta("text", "")),
 			"state": int(object.get_meta("state", 0)),
 			"position": _agent_point(object.position),
 			"relative_to_you": _agent_relative_phrase(local_position, object.position),
@@ -1374,7 +1505,11 @@ func _run_smoke_actions() -> void:
 	elif frame == SMOKE_CHAT_FRAME:
 		client.send_chat(smoke_message)
 	elif frame == SMOKE_PLACE_FRAME:
-		client.place_object(smoke_object_kind)
+		var smoke_target := camera_position
+		if avatars.has(local_identity):
+			var avatar: AvatarNode = avatars[local_identity]
+			smoke_target = avatar.world_target
+		client.place_object(smoke_object_kind, int(smoke_target.x), int(smoke_target.y))
 	elif frame == SMOKE_INTERACT_FRAME:
 		client.interact_near()
 
@@ -1485,6 +1620,9 @@ class WorldObjectNode:
 		draw_rect(Rect2(Vector2(-18, -20), Vector2(36, 18)), Color(0.62, 0.40, 0.20))
 		draw_rect(Rect2(Vector2(-15, -17), Vector2(30, 12)), Color(0.78, 0.55, 0.30))
 		draw_rect(Rect2(Vector2(-11, -13), Vector2(22, 2)), Color(0.36, 0.20, 0.10, 0.55))
+		var text: String = str(get_meta("text", ""))
+		if not text.is_empty():
+			draw_string(ThemeDB.fallback_font, Vector2(-13, -7), text.substr(0, 10), HORIZONTAL_ALIGNMENT_LEFT, 26, 8, Color(0.20, 0.14, 0.07))
 
 class PlotLayerNode:
 	extends Node2D

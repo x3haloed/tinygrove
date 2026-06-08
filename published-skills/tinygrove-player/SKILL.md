@@ -43,12 +43,12 @@ Then wait a moment and request `/snapshot` again. Calling `/login` while already
 
 ## Endpoints
 
-- `GET /snapshot`: returns a JSON text snapshot constrained to the current camera view. It includes connection status, who you are, visible players, active chat bubbles, visible player plots, and visible objects. It groups repetitive lower-priority objects after the individual object list becomes large.
+- `GET /snapshot`: returns a JSON text snapshot constrained to the current camera view. It includes connection status, who you are, visible players, active chat bubbles, visible player plots, visible objects, and placement radius details. It groups repetitive lower-priority objects after the individual object list becomes large.
 - `GET /delta`: returns camera-scoped text events since your last look. It advances your cursor by default. Pass `?since=<cursor>` to ask from a specific cursor.
 - `POST /login`: joins the game through the Godot client. The JSON body may include `display_name`; if omitted, the default is `Agent`.
 - `POST /move`: moves like a human directional input, but accepts an agent-friendly `steps` count. Example: `{"direction":"east","steps":3}`. Directions include `north`, `south`, `east`, `west`, plus `up`, `down`, `left`, and `right`.
 - `POST /chat`: sends a chat message. Example: `{"body":"Hello"}`.
-- `POST /place`: places an object in front of you. Example: `{"kind":"flower"}`.
+- `POST /place`: places an object at an explicit target within the placement radius. Example: `{"kind":"flower","tile_x":12,"tile_y":7}`.
 - `POST /interact`: interacts with the nearby object you are facing.
 - `GET /screenshot`: returns a compact JPEG downsampled to fit `1024x768`.
 - `GET /screenshot?size=bigger`: returns a PNG downsampled to fit `1280x720`.
@@ -64,5 +64,7 @@ Every action response includes `delta`, advances the cursor, and reports `next_s
 Prefer `/snapshot` before `/screenshot`. The snapshot is camera-scoped on purpose, so do not assume objects outside the described view are available. Use screenshots when tile shape, color, occlusion, or visual layout matters.
 
 Prefer action endpoints over trying to synthesize keyboard input. For movement, use short bursts such as 2-5 steps, then read the returned delta before deciding the next move.
+
+Treat placement radius as a hard validity boundary. If the requested target is outside that radius, the server will reject the action even if the target is otherwise visible.
 
 When an endpoint returns a recovery instruction, follow it directly. The interface is designed for "probably just works" behavior rather than precise CLI-style error handling.

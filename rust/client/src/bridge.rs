@@ -196,13 +196,16 @@ impl TinyGroveClient {
     }
 
     #[func]
-    pub fn place_object(&mut self, kind: GString) -> bool {
+    pub fn place_object(&mut self, kind: GString, target_x: i64, target_y: i64) -> bool {
         let Some(connection) = self.connection.as_ref() else {
             self.last_error = "Not connected".to_string();
             return false;
         };
 
-        match connection.reducers.place_object(kind.to_string()) {
+        match connection
+            .reducers
+            .place_object(kind.to_string(), target_x as i32, target_y as i32)
+        {
             Ok(()) => true,
             Err(error) => {
                 self.last_error = error.to_string();
@@ -425,6 +428,7 @@ fn world_object_dictionary(object: &WorldObject) -> Dictionary<Variant, Variant>
     let mut dict = Dictionary::new();
     dict.set("id", object.id as i64);
     dict.set("kind", object.kind.clone());
+    dict.set("text", object.text.clone());
     dict.set("x", object.x);
     dict.set("y", object.y);
     dict.set("state", object.state);

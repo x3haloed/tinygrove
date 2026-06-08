@@ -9,6 +9,7 @@ const PLOT_COLUMNS: i32 = 4;
 const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
 const MAX_OBJECT_KIND_CHARS: usize = 24;
+const MAX_PLACE_RADIUS: i32 = MOVE_STEP * 8;
 
 #[table(accessor = server_config, public)]
 pub struct ServerConfig {
@@ -68,6 +69,7 @@ pub struct WorldObject {
     #[auto_inc]
     pub id: u64,
     pub kind: String,
+    pub text: String,
     pub x: i32,
     pub y: i32,
     pub state: i32,
@@ -207,13 +209,24 @@ pub fn send_chat(ctx: &ReducerContext, body: String) -> Result<(), String> {
 }
 
 #[reducer]
-pub fn place_object(ctx: &ReducerContext, kind: String) -> Result<(), String> {
+pub fn place_object(
+    ctx: &ReducerContext,
+    kind: String,
+    target_x: i32,
+    target_y: i32,
+) -> Result<(), String> {
     require_joined(ctx)?;
 
     let kind = clean_object_kind(kind)?;
     let position = require_position(ctx)?;
-    let target = interaction_target(&position);
+    let target = (target_x, target_y);
     let plot = require_plot(ctx)?;
+
+    if !within_place_radius(&position, target.0, target.1) {
+        return Err(format!(
+            "You can only place within {MAX_PLACE_RADIUS} world units of your current position"
+        ));
+    }
 
     if !plot_contains(&plot, target.0, target.1) {
         return Err("You can only place objects inside your plot".to_string());
@@ -231,6 +244,7 @@ pub fn place_object(ctx: &ReducerContext, kind: String) -> Result<(), String> {
     ctx.db.world_object().insert(WorldObject {
         id: 0,
         kind,
+        text: String::new(),
         x: target.0,
         y: target.1,
         state: 0,
@@ -267,13 +281,15 @@ pub fn interact_near(ctx: &ReducerContext) -> Result<(), String> {
             });
         }
         "sign" => {
+            let text = if object.text.is_empty() {
+                "Welcome to Tiny Grove.".to_string()
+            } else {
+                object.text.clone()
+            };
             ctx.db.chat_message().insert(ChatMessage {
                 id: 0,
                 sender: ctx.sender(),
-                body: format!(
-                    "{} reads the sign: Welcome to Tiny Grove.",
-                    player.display_name
-                ),
+                body: format!("{} reads the sign: {}", player.display_name, text),
                 sent_at: ctx.timestamp,
             });
         }
@@ -352,6 +368,12 @@ fn plot_contains(plot: &PlayerPlot, x: i32, y: i32) -> bool {
         && y < plot.origin_y + plot.height
 }
 
+fn within_place_radius(position: &PlayerPosition, x: i32, y: i32) -> bool {
+    let dx = x - position.x;
+    let dy = y - position.y;
+    dx * dx + dy * dy <= MAX_PLACE_RADIUS * MAX_PLACE_RADIUS
+}
+
 fn interaction_target(position: &PlayerPosition) -> (i32, i32) {
     let (dx, dy) = if position.last_dx == 0 && position.last_dy == 0 {
         (0, 1)
@@ -392,6 +414,7 @@ fn seed_world_objects(ctx: &ReducerContext) {
         ctx.db.world_object().insert(WorldObject {
             id: 0,
             kind: kind.to_string(),
+            text: String::new(),
             x,
             y,
             state,

@@ -9,6 +9,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub struct WorldObject {
     pub id: u64,
     pub kind: String,
+    pub text: String,
     pub x: i32,
     pub y: i32,
     pub state: i32,
@@ -27,6 +28,7 @@ impl __sdk::InModule for WorldObject {
 pub struct WorldObjectCols {
     pub id: __sdk::__query_builder::Col<WorldObject, u64>,
     pub kind: __sdk::__query_builder::Col<WorldObject, String>,
+    pub text: __sdk::__query_builder::Col<WorldObject, String>,
     pub x: __sdk::__query_builder::Col<WorldObject, i32>,
     pub y: __sdk::__query_builder::Col<WorldObject, i32>,
     pub state: __sdk::__query_builder::Col<WorldObject, i32>,
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for WorldObject {
         WorldObjectCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             kind: __sdk::__query_builder::Col::new(table_name, "kind"),
+            text: __sdk::__query_builder::Col::new(table_name, "text"),
             x: __sdk::__query_builder::Col::new(table_name, "x"),
             y: __sdk::__query_builder::Col::new(table_name, "y"),
             state: __sdk::__query_builder::Col::new(table_name, "state"),

@@ -4,6 +4,8 @@ Tiny Grove is an early multiplayer game prototype about shared presence, player-
 
 The first goal is deliberately modest: a 2D Godot play canvas where friends can join the same SpacetimeDB-backed world, move simple avatars around, and send chat messages. The larger direction is a collaborative game where players customize their own chunks with tiles, sprites, and declarative game rules such as buttons, triggers, and interactions.
 
+The first real UGC step is mouse-driven placement: players enter a place mode, move a preview with the cursor, and place selected objects only within a server-validated radius around their character.
+
 ## Project Shape
 
 - Godot is the client and presentation layer.
@@ -69,6 +71,7 @@ Reducers:
 - `join_game(display_name, avatar_color, client_protocol)`
 - `move_player(dx, dy)`
 - `send_chat(body)`
+- `place_object(kind, target_x, target_y)`
 
 The join path already includes a client protocol check so future live upgrade work has a simple compatibility hook from the start.
 
@@ -105,4 +108,4 @@ The first published skill is `published-skills/tinygrove-player/SKILL.md`. It do
 
 Each client writes a discovery file under `.tinygrove/agents/` with its profile, PID, port, login state, and base URL. Use `TINYGROVE_AGENT_PROFILE=agent` for agent-owned clients, `TINYGROVE_AGENT_NAME=Codex` to set the default login name, and `TINYGROVE_AGENT_PORT=37390` when a harness needs a pinned port. Without an explicit port, clients scan upward from `37373` to avoid local collisions. Agent and human profiles also use separate SpacetimeDB credential keys, so an agent client does not inherit the human player's local identity.
 
-Action endpoints such as `/move`, `/chat`, `/place`, and `/interact` return a bounded text delta and advance the agent's state cursor. Agents can also call `/delta?since=<cursor>` to revisit recent camera-scoped events without opening a stream.
+Action endpoints such as `/move`, `/chat`, `/place`, and `/interact` return a bounded text delta and advance the agent's state cursor. `/place` now requires an explicit target within the placement radius, and the snapshot includes the radius in world units so agents can avoid invalid attempts. Agents can also call `/delta?since=<cursor>` to revisit recent camera-scoped events without opening a stream.
