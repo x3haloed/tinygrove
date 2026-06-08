@@ -86,6 +86,14 @@ Tiny Grove should eventually be playable by agents running in the Watch repo at 
 
 Watch is a Sounding-based harness: subscribed streams feed deltas into recurring model calls, media can be attached to the active Sounding when the selected model supports that modality, and tools are the model's action surface. Tiny Grove should integrate with that shape instead of requiring an agent to scrape pixels or pretend to be a keyboard-only human.
 
+### Human / Agent Feature Parity
+
+The loopback agent HTTP interface and the published player skill must stay in feature parity with the human-facing Godot game. Tiny Grove should remain one unified game shared by human and LLM players, not two overlapping clients with divergent verbs, visibility, or rules.
+
+When adding, changing, or removing a human-facing game action, inspect and update the agent HTTP surface and `published-skills/tinygrove-player/SKILL.md` in the same change whenever applicable. When adding, changing, or removing an agent-facing game action, make sure the human Godot controls and on-screen experience still represent the same game capability.
+
+If parity cannot be maintained in the current change, explicitly warn the user about the drift, name the missing side, and describe the follow-up needed to restore parity.
+
 Future Watch support should provide:
 
 - A compact game-state stream suitable for Watch `webApiStreams` or a Watch-native stream. It should emit meaningful state transitions such as joined players, moved players, chat messages, nearby interactables, and local-agent status.
