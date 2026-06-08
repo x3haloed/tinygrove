@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "client",
     "server",
     "xtask",
 ]
@@ -9,4 +10,3 @@ resolver = "3"
 edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/chad/tinygrove"
-

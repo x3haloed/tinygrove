@@ -7,6 +7,7 @@ cargo xtask doctor
 cargo xtask db start
 cargo xtask db publish
 cargo xtask db generate
+cargo xtask client build
 cargo xtask godot run
 ```
 
@@ -15,6 +16,7 @@ Common commands:
 ```sh
 cargo xtask check
 cargo xtask dev
+cargo xtask client build
 cargo xtask db describe
 ```
 
@@ -27,3 +29,4 @@ The first multiplayer slice is intentionally small:
 - Godot owns presentation and input.
 - Clients send reducer intents; they do not mutate game state directly.
 - Generated Rust bindings belong in `rust/client/generated`.
+- The Godot Rust extension is built and staged with `cargo xtask client build`.

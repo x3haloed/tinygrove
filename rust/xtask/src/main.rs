@@ -27,6 +27,7 @@ fn main() -> ExitCode {
         [cmd, subcmd] if cmd == "db" && subcmd == "publish" => db_publish(),
         [cmd, subcmd] if cmd == "db" && subcmd == "generate" => db_generate(),
         [cmd, subcmd] if cmd == "db" && subcmd == "describe" => db_describe(),
+        [cmd, subcmd] if cmd == "client" && subcmd == "build" => client_build(),
         [cmd, subcmd] if cmd == "godot" && subcmd == "run" => godot_run(),
         _ => Err(format!("Unknown command: {}", args.join(" "))),
     };
@@ -57,6 +58,7 @@ Commands:
   db publish    Publish the module to local database {DB_NAME}
   db generate   Generate Rust client bindings into rust/client/generated
   db describe   Describe the local database schema
+  client build  Build and stage the Godot Rust extension
   godot run     Launch the Godot project
 "
     );
@@ -77,6 +79,7 @@ fn check() -> Result<(), String> {
 fn dev() -> Result<(), String> {
     db_publish()?;
     db_generate()?;
+    client_build()?;
     godot_run()
 }
 
@@ -142,6 +145,35 @@ fn db_describe() -> Result<(), String> {
         ["describe", DB_NAME, "--server", "local", "--json"],
         repo_dir(),
     )
+}
+
+fn client_build() -> Result<(), String> {
+    run(
+        "cargo",
+        ["build", "--package", "tinygrove_client"],
+        rust_dir(),
+    )?;
+    let source = client_library_path();
+    let target = repo_dir().join("godot").join("bin").join(
+        source
+            .file_name()
+            .ok_or("client library path has no file name")?,
+    );
+    std::fs::create_dir_all(
+        target
+            .parent()
+            .ok_or("client library target has no parent")?,
+    )
+    .map_err(|error| format!("failed to create Godot bin directory: {error}"))?;
+    std::fs::copy(&source, &target).map_err(|error| {
+        format!(
+            "failed to copy {} to {}: {error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    println!("staged {}", target.display());
+    Ok(())
 }
 
 fn godot_run() -> Result<(), String> {
@@ -236,4 +268,16 @@ fn repo_dir() -> PathBuf {
 
 fn rust_dir() -> PathBuf {
     repo_dir().join("rust")
+}
+
+fn client_library_path() -> PathBuf {
+    let file_name = if cfg!(target_os = "macos") {
+        "libtinygrove_client.dylib"
+    } else if cfg!(target_os = "windows") {
+        "tinygrove_client.dll"
+    } else {
+        "libtinygrove_client.so"
+    };
+
+    rust_dir().join("target").join("debug").join(file_name)
 }

@@ -37,6 +37,7 @@ In another terminal:
 ```sh
 cargo xtask db publish
 cargo xtask db generate
+cargo xtask client build
 cargo xtask godot run
 ```
 
@@ -45,6 +46,7 @@ Useful commands:
 ```sh
 cargo xtask check
 cargo xtask db build
+cargo xtask client build
 cargo xtask db describe
 ```
 
@@ -78,4 +80,3 @@ The next milestone is a true vertical slice:
 - unsupported client protocol versions are rejected or surfaced clearly
 
 After that, the project can grow toward world chunks, tile placement, and declarative player-authored interactions.
-

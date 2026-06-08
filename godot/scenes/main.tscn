@@ -1,0 +1,64 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="World" type="Node2D" parent="."]
+
+[node name="Hud" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -320.0
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="Hud"]
+layout_mode = 2
+
+[node name="Status" type="Label" parent="Hud/VBox"]
+layout_mode = 2
+text = "Disconnected"
+
+[node name="NameRow" type="HBoxContainer" parent="Hud/VBox"]
+layout_mode = 2
+
+[node name="NameEdit" type="LineEdit" parent="Hud/VBox/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Player"
+placeholder_text = "Name"
+
+[node name="JoinButton" type="Button" parent="Hud/VBox/NameRow"]
+layout_mode = 2
+text = "Join"
+
+[node name="ChatLog" type="RichTextLabel" parent="Hud/VBox"]
+custom_minimum_size = Vector2(0, 280)
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true
+
+[node name="ChatRow" type="HBoxContainer" parent="Hud/VBox"]
+layout_mode = 2
+
+[node name="ChatEdit" type="LineEdit" parent="Hud/VBox/ChatRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Message"
+
+[node name="SendButton" type="Button" parent="Hud/VBox/ChatRow"]
+layout_mode = 2
+text = "Send"
+

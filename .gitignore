@@ -85,6 +85,7 @@ Cargo.lock
 
 # Local SpacetimeDB development data
 .spacetime-data/
+godot/bin/
 
 ### VisualStudioCode ###
 .vscode/*

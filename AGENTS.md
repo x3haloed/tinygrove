@@ -27,8 +27,9 @@ Current front-door commands:
 - `cargo xtask db publish`: publish `rust/server` to local database `tinygrove-dev`.
 - `cargo xtask db generate`: regenerate Rust bindings into `rust/client/generated`.
 - `cargo xtask db describe`: describe the local database schema as JSON.
+- `cargo xtask client build`: build and stage the Godot Rust extension into `godot/bin/`.
 - `cargo xtask godot run`: launch the Godot project.
-- `cargo xtask dev`: publish, generate, then launch Godot; it assumes the local DB server is already running.
+- `cargo xtask dev`: publish, generate, build the client extension, then launch Godot; it assumes the local DB server is already running.
 
 Keep `cargo xtask` usable from the repo root. It may also work from `rust/`, but root use is the default orientation for humans.
 
