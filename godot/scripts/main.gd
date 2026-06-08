@@ -4,6 +4,9 @@ const TILE_SIZE := 32
 const AVATAR_HALF_WIDTH := 8.0
 const AVATAR_HEIGHT := 22.0
 const MOVE_REPEAT_SECONDS := 0.10
+const AVATAR_SMOOTH_SPEED := 18.0
+const CAMERA_SMOOTH_SPEED := 10.0
+const CAMERA_DEADZONE := Vector2(220.0, 120.0)
 const SMOKE_JOIN_FRAME := 6
 const SMOKE_MOVE_FRAME := 18
 const SMOKE_CHAT_FRAME := 30
@@ -20,6 +23,9 @@ const STATUS_MAX_CHARS := 92
 var client: RefCounted
 var avatars: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
+var local_identity := ""
+var camera_position := Vector2.ZERO
+var camera_initialized := false
 var move_elapsed := 0.0
 var frame := 0
 var smoke_enabled := false
@@ -29,7 +35,10 @@ var smoke_dx := 0
 var smoke_dy := 0
 
 func _ready() -> void:
-	world.add_child(GroundNode.new())
+	world.y_sort_enabled = true
+	var ground := GroundNode.new()
+	ground.z_index = -1000
+	world.add_child(ground)
 	_style_ui()
 	join_button.pressed.connect(_join_game)
 	send_button.pressed.connect(_send_chat)
@@ -50,6 +59,7 @@ func _process(delta: float) -> void:
 	_update_status()
 	_update_chat()
 	_update_world()
+	_update_camera(delta)
 	_handle_movement(delta)
 
 func _join_game() -> void:
@@ -87,20 +97,61 @@ func _update_status() -> void:
 
 func _update_world() -> void:
 	var seen := {}
+	local_identity = str(client.local_identity())
 	for row in client.players():
 		var identity := str(row["identity"])
 		seen[identity] = true
 		var avatar := _avatar_for(identity)
-		avatar.position = Vector2(float(row["x"]), float(row["y"])) + size * 0.5
+		avatar.set_world_target(Vector2(float(row["x"]), float(row["y"])))
 		avatar.set_meta("display_name", str(row["display_name"]))
 		avatar.set_meta("avatar_color", int(row["avatar_color"]))
 		avatar.set_meta("bubble", latest_chat_by_sender.get(identity, ""))
+		avatar.set_meta("is_local", identity == local_identity)
 		avatar.queue_redraw()
 
 	for identity in avatars.keys():
 		if not seen.has(identity):
 			avatars[identity].queue_free()
 			avatars.erase(identity)
+
+func _update_camera(delta: float) -> void:
+	if local_identity.is_empty() or not avatars.has(local_identity):
+		_apply_camera()
+		return
+
+	var avatar: AvatarNode = avatars[local_identity]
+	var focus := avatar.world_target
+	if not camera_initialized:
+		camera_position = focus
+		camera_initialized = true
+		_apply_camera()
+		return
+
+	var half_view := size * 0.5
+	var half_deadzone := CAMERA_DEADZONE * 0.5
+	var screen_focus := focus - camera_position + half_view
+	var left := half_view.x - half_deadzone.x
+	var right := half_view.x + half_deadzone.x
+	var top := half_view.y - half_deadzone.y
+	var bottom := half_view.y + half_deadzone.y
+	var desired := camera_position
+
+	if screen_focus.x < left:
+		desired.x -= left - screen_focus.x
+	elif screen_focus.x > right:
+		desired.x += screen_focus.x - right
+
+	if screen_focus.y < top:
+		desired.y -= top - screen_focus.y
+	elif screen_focus.y > bottom:
+		desired.y += screen_focus.y - bottom
+
+	var t := 1.0 - exp(-CAMERA_SMOOTH_SPEED * delta)
+	camera_position = camera_position.lerp(desired, t)
+	_apply_camera()
+
+func _apply_camera() -> void:
+	world.position = (size * 0.5 - camera_position).round()
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
@@ -171,6 +222,24 @@ func _run_smoke_actions() -> void:
 class AvatarNode:
 	extends Node2D
 
+	var world_target := Vector2.ZERO
+	var initialized := false
+
+	func _process(delta: float) -> void:
+		if not initialized:
+			return
+
+		var t := 1.0 - exp(-AVATAR_SMOOTH_SPEED * delta)
+		position = position.lerp(world_target, t)
+		z_index = int(position.y)
+
+	func set_world_target(target: Vector2) -> void:
+		world_target = target
+		if not initialized:
+			position = target
+			initialized = true
+			z_index = int(position.y)
+
 	func _draw() -> void:
 		var color_int: int = int(get_meta("avatar_color", 0x66CCAA))
 		var color: Color = Color.hex(color_int)
@@ -206,29 +275,39 @@ class GroundNode:
 		queue_redraw()
 
 	func _draw() -> void:
+		var origin: Vector2 = -get_parent().position
 		var viewport_size: Vector2 = get_viewport_rect().size
-		var cols: int = int(ceil(viewport_size.x / TILE_SIZE)) + 1
-		var rows: int = int(ceil(viewport_size.y / TILE_SIZE)) + 1
-		for y in range(rows):
-			for x in range(cols):
+		var min_tile: int = int(floor((origin.x - TILE_SIZE) / TILE_SIZE))
+		var max_tile_x: int = int(ceil((origin.x + viewport_size.x + TILE_SIZE) / TILE_SIZE))
+		var min_tile_y: int = int(floor((origin.y - TILE_SIZE) / TILE_SIZE))
+		var max_tile_y: int = int(ceil((origin.y + viewport_size.y + TILE_SIZE) / TILE_SIZE))
+		for y in range(min_tile_y, max_tile_y):
+			for x in range(min_tile, max_tile_x):
 				var base: Color = Color(0.41, 0.66, 0.38) if (x + y) % 2 == 0 else Color(0.36, 0.61, 0.34)
 				var pos: Vector2 = Vector2(x * TILE_SIZE, y * TILE_SIZE)
 				draw_rect(Rect2(pos, Vector2(TILE_SIZE, TILE_SIZE)), base)
 				draw_rect(Rect2(pos + Vector2(2, 2), Vector2(4, 4)), Color(0.56, 0.76, 0.42, 0.45))
-		_draw_path(viewport_size)
-		_draw_trees(viewport_size)
+		_draw_path(min_tile, max_tile_x)
+		_draw_trees(origin, viewport_size)
 
-	func _draw_path(viewport_size: Vector2) -> void:
-		var path_y: float = floor(viewport_size.y * 0.58 / TILE_SIZE) * TILE_SIZE
-		for x in range(-TILE_SIZE, int(viewport_size.x) + TILE_SIZE, TILE_SIZE):
-			draw_rect(Rect2(Vector2(x, path_y), Vector2(TILE_SIZE, TILE_SIZE)), Color(0.72, 0.62, 0.42))
-			draw_rect(Rect2(Vector2(x, path_y + TILE_SIZE - 4), Vector2(TILE_SIZE, 4)), Color(0.56, 0.47, 0.31))
+	func _draw_path(min_tile_x: int, max_tile_x: int) -> void:
+		for tile_x in range(min_tile_x, max_tile_x):
+			var x := tile_x * TILE_SIZE
+			draw_rect(Rect2(Vector2(x, 0), Vector2(TILE_SIZE, TILE_SIZE)), Color(0.72, 0.62, 0.42))
+			draw_rect(Rect2(Vector2(x, TILE_SIZE - 4), Vector2(TILE_SIZE, 4)), Color(0.56, 0.47, 0.31))
 
-	func _draw_trees(viewport_size: Vector2) -> void:
-		for x in range(24, int(viewport_size.x), 96):
-			_draw_tree(Vector2(x, 128 + int(x / 96) % 2 * 28))
-		for x in range(52, int(viewport_size.x), 128):
-			_draw_tree(Vector2(x, viewport_size.y - 116))
+	func _draw_trees(origin: Vector2, viewport_size: Vector2) -> void:
+		var min_x: int = int(floor((origin.x - 160.0) / 128.0)) * 128
+		var max_x: int = int(ceil((origin.x + viewport_size.x + 160.0) / 128.0)) * 128
+		var min_y: int = int(floor((origin.y - 160.0) / 160.0)) * 160
+		var max_y: int = int(ceil((origin.y + viewport_size.y + 160.0) / 160.0)) * 160
+		for x in range(min_x + 32, max_x, 128):
+			_draw_tree(Vector2(x, -168 + int(abs(x) / 128) % 2 * 24))
+		for x in range(min_x + 80, max_x, 128):
+			_draw_tree(Vector2(x, 176 + int(abs(x) / 128) % 2 * 24))
+		for y in range(min_y + 96, max_y, 160):
+			_draw_tree(Vector2(-360 + int(abs(y) / 160) % 2 * 32, y))
+			_draw_tree(Vector2(360 - int(abs(y) / 160) % 2 * 32, y))
 
 	func _draw_tree(pos: Vector2) -> void:
 		draw_rect(Rect2(pos + Vector2(-5, 16), Vector2(10, 16)), Color(0.36, 0.20, 0.10))

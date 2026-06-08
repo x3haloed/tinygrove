@@ -176,6 +176,18 @@ impl TinyGroveClient {
     }
 
     #[func]
+    pub fn local_identity(&self) -> GString {
+        let Some(connection) = self.connection.as_ref() else {
+            return GString::new();
+        };
+
+        connection
+            .try_identity()
+            .map(|identity| GString::from(&identity_key(&identity)))
+            .unwrap_or_else(GString::new)
+    }
+
+    #[func]
     pub fn players(&self) -> Array<Dictionary<Variant, Variant>> {
         let mut rows = Array::new();
         let Some(connection) = self.connection.as_ref() else {

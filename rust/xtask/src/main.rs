@@ -177,8 +177,28 @@ fn client_build() -> Result<(), String> {
             target.display()
         )
     })?;
+    sign_client_library(&target)?;
     println!("staged {}", target.display());
     Ok(())
+}
+
+fn sign_client_library(target: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    run(
+        "codesign",
+        [
+            "--force",
+            "--sign",
+            "-",
+            target
+                .to_str()
+                .ok_or("client library target path is not valid UTF-8")?,
+        ],
+        repo_dir(),
+    )
 }
 
 fn godot_run() -> Result<(), String> {
