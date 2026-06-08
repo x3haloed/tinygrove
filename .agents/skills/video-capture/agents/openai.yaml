@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video Capture"
+  short_description: "Capture short desktop recordings for model inspection"
+  default_prompt: "Capture a short desktop recording for this task, then convert it into timestamped frames for model inspection."

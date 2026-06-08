@@ -1,0 +1,4 @@
+interface:
+  display_name: "Godot Game"
+  short_description: "Edit, run, and debug Godot projects"
+  default_prompt: "Use $godot-game to create or edit a Godot scene, run the project headlessly, or inspect debug and UID output."
