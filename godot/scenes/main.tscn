@@ -15,13 +15,11 @@ script = ExtResource("1_main")
 
 [node name="Hud" type="PanelContainer" parent="."]
 layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -320.0
-grow_horizontal = 0
-grow_vertical = 2
+anchors_preset = 0
+offset_left = 12.0
+offset_top = 10.0
+offset_right = 294.0
+offset_bottom = 84.0
 
 [node name="VBox" type="VBoxContainer" parent="Hud"]
 layout_mode = 2
@@ -43,22 +41,31 @@ placeholder_text = "Name"
 layout_mode = 2
 text = "Join"
 
-[node name="ChatLog" type="RichTextLabel" parent="Hud/VBox"]
-custom_minimum_size = Vector2(0, 280)
+[node name="Recent" type="Label" parent="Hud/VBox"]
 layout_mode = 2
-size_flags_vertical = 3
-bbcode_enabled = true
-scroll_following = true
+text = "WASD / arrows to move"
 
-[node name="ChatRow" type="HBoxContainer" parent="Hud/VBox"]
+[node name="ChatInput" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 96.0
+offset_top = -54.0
+offset_right = -96.0
+offset_bottom = -12.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="ChatRow" type="HBoxContainer" parent="ChatInput"]
 layout_mode = 2
 
-[node name="ChatEdit" type="LineEdit" parent="Hud/VBox/ChatRow"]
+[node name="ChatEdit" type="LineEdit" parent="ChatInput/ChatRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "Message"
 
-[node name="SendButton" type="Button" parent="Hud/VBox/ChatRow"]
+[node name="SendButton" type="Button" parent="ChatInput/ChatRow"]
 layout_mode = 2
 text = "Send"
-
