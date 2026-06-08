@@ -11,6 +11,9 @@ const SMOKE_JOIN_FRAME := 6
 const SMOKE_MOVE_FRAME := 18
 const SMOKE_CHAT_FRAME := 30
 const STATUS_MAX_CHARS := 92
+const BUBBLE_VISIBLE_SECONDS := 3.5
+const BUBBLE_FADE_SECONDS := 1.1
+const BUBBLE_MAX_CHARS := 28
 
 @onready var world: Node2D = $World
 @onready var status_label: Label = $Hud/VBox/Status
@@ -23,6 +26,8 @@ const STATUS_MAX_CHARS := 92
 var client: RefCounted
 var avatars: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
+var chat_messages_seen: Dictionary = {}
+var chat_bubbles_by_sender: Dictionary = {}
 var local_identity := ""
 var camera_position := Vector2.ZERO
 var camera_initialized := false
@@ -105,14 +110,38 @@ func _update_world() -> void:
 		avatar.set_world_target(Vector2(float(row["x"]), float(row["y"])))
 		avatar.set_meta("display_name", str(row["display_name"]))
 		avatar.set_meta("avatar_color", int(row["avatar_color"]))
-		avatar.set_meta("bubble", latest_chat_by_sender.get(identity, ""))
+		avatar.set_meta("identity", identity)
 		avatar.set_meta("is_local", identity == local_identity)
+		var bubble_info: Dictionary = chat_bubbles_by_sender.get(identity, {})
+		avatar.set_meta("bubble_body", str(bubble_info.get("body", "")))
+		avatar.set_meta("bubble_started_at", float(bubble_info.get("started_at", 0.0)))
 		avatar.queue_redraw()
 
 	for identity in avatars.keys():
 		if not seen.has(identity):
 			avatars[identity].queue_free()
 			avatars.erase(identity)
+
+func _ingest_chat_messages() -> String:
+	var recent := ""
+	for row in client.chat_messages():
+		var message_id := int(row["id"])
+		if chat_messages_seen.has(message_id):
+			continue
+
+		chat_messages_seen[message_id] = true
+		var sender := str(row["sender"])
+		var body := str(row["body"])
+		var display_name := str(row["display_name"])
+		var now := Time.get_ticks_msec() / 1000.0
+		chat_bubbles_by_sender[sender] = {
+			"body": body,
+			"display_name": display_name,
+			"started_at": now,
+		}
+		recent = "%s: %s" % [display_name, body]
+
+	return recent
 
 func _update_camera(delta: float) -> void:
 	if local_identity.is_empty() or not avatars.has(local_identity):
@@ -155,12 +184,11 @@ func _apply_camera() -> void:
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
-	var recent := ""
+	var recent := _ingest_chat_messages()
 	for row in client.chat_messages():
 		var sender := str(row["sender"])
 		var body := str(row["body"])
 		latest_chat_by_sender[sender] = body
-		recent = "%s: %s" % [str(row["display_name"]), body]
 	if recent.is_empty():
 		recent_label.text = "WASD / arrows to move"
 	else:
@@ -225,6 +253,9 @@ class AvatarNode:
 	var world_target := Vector2.ZERO
 	var initialized := false
 
+	func _ready() -> void:
+		set_process(true)
+
 	func _process(delta: float) -> void:
 		if not initialized:
 			return
@@ -232,6 +263,7 @@ class AvatarNode:
 		var t := 1.0 - exp(-AVATAR_SMOOTH_SPEED * delta)
 		position = position.lerp(world_target, t)
 		z_index = int(position.y)
+		queue_redraw()
 
 	func set_world_target(target: Vector2) -> void:
 		world_target = target
@@ -254,19 +286,32 @@ class AvatarNode:
 		draw_rect(Rect2(Vector2(-8, -18), Vector2(16, 4)), Color(0.24, 0.13, 0.09))
 		var label: String = str(get_meta("display_name", "Player"))
 		draw_string(ThemeDB.fallback_font, Vector2(-36, -24), label, HORIZONTAL_ALIGNMENT_CENTER, 72, 12, Color(0.97, 0.95, 0.82))
-		var bubble: String = str(get_meta("bubble", ""))
-		if not bubble.is_empty():
-			var preview: String = bubble.substr(0, 28)
-			if bubble.length() > 28:
+		var bubble_body: String = str(get_meta("bubble_body", ""))
+		if not bubble_body.is_empty():
+			var preview: String = bubble_body.substr(0, BUBBLE_MAX_CHARS)
+			if bubble_body.length() > BUBBLE_MAX_CHARS:
 				preview += "..."
-			var width: float = clampf(ThemeDB.fallback_font.get_string_size(preview, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 12.0, 36.0, 150.0)
-			var rect: Rect2 = Rect2(Vector2(-width * 0.5, -48), Vector2(width, 18))
-			draw_rect(rect, Color(0.98, 0.95, 0.82))
-			draw_rect(Rect2(rect.position, Vector2(rect.size.x, 2)), Color(0.25, 0.20, 0.15))
-			draw_rect(Rect2(rect.position + Vector2(0, rect.size.y - 2), Vector2(rect.size.x, 2)), Color(0.25, 0.20, 0.15))
-			draw_rect(Rect2(rect.position, Vector2(2, rect.size.y)), Color(0.25, 0.20, 0.15))
-			draw_rect(Rect2(rect.position + Vector2(rect.size.x - 2, 0), Vector2(2, rect.size.y)), Color(0.25, 0.20, 0.15))
-			draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 13), preview, HORIZONTAL_ALIGNMENT_LEFT, width - 12, 11, Color(0.12, 0.10, 0.08))
+			var started_at: float = float(get_meta("bubble_started_at", 0.0))
+			var age := Time.get_ticks_msec() / 1000.0 - started_at
+			var alpha := 0.0
+			if age < 0.15:
+				alpha = clampf(age / 0.15, 0.0, 1.0)
+			elif age <= BUBBLE_VISIBLE_SECONDS:
+				alpha = 1.0
+			elif age <= BUBBLE_VISIBLE_SECONDS + BUBBLE_FADE_SECONDS:
+				alpha = clampf(1.0 - ((age - BUBBLE_VISIBLE_SECONDS) / BUBBLE_FADE_SECONDS), 0.0, 1.0)
+			if alpha > 0.0:
+				var width: float = clampf(ThemeDB.fallback_font.get_string_size(preview, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 12.0, 36.0, 150.0)
+				var rect: Rect2 = Rect2(Vector2(-width * 0.5, -48), Vector2(width, 18))
+				var fill := Color(0.98, 0.95, 0.82, alpha)
+				var trim := Color(0.25, 0.20, 0.15, alpha)
+				var text := Color(0.12, 0.10, 0.08, alpha)
+				draw_rect(rect, fill)
+				draw_rect(Rect2(rect.position, Vector2(rect.size.x, 2)), trim)
+				draw_rect(Rect2(rect.position + Vector2(0, rect.size.y - 2), Vector2(rect.size.x, 2)), trim)
+				draw_rect(Rect2(rect.position, Vector2(2, rect.size.y)), trim)
+				draw_rect(Rect2(rect.position + Vector2(rect.size.x - 2, 0), Vector2(2, rect.size.y)), trim)
+				draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 13), preview, HORIZONTAL_ALIGNMENT_LEFT, width - 12, 11, text)
 
 class GroundNode:
 	extends Node2D
