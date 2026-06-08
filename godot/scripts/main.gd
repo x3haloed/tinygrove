@@ -22,6 +22,11 @@ const AGENT_HTTP_PORT_SCAN_COUNT := 32
 const AGENT_REGISTRY_RELATIVE_DIR := "../.tinygrove/agents"
 const AGENT_REGISTRY_WRITE_SECONDS := 1.0
 const AGENT_MAX_INDIVIDUAL_OBJECTS := 40
+const AGENT_MAX_DELTA_EVENTS := 24
+const AGENT_MAX_STORED_EVENTS := 240
+const AGENT_MAX_MOVE_STEPS := 12
+const AGENT_ACTION_SETTLE_MSEC := 180
+const AGENT_ACTION_POLL_MSEC := 15
 const AGENT_DEFAULT_SCREENSHOT_MAX := Vector2i(1024, 768)
 const AGENT_BIGGER_SCREENSHOT_MAX := Vector2i(1280, 720)
 const AGENT_MAX_SCREENSHOT_MAX := Vector2i(1920, 1080)
@@ -59,6 +64,14 @@ var agent_http_port := 0
 var agent_profile := "human"
 var agent_registry_path := ""
 var agent_registry_elapsed := 0.0
+var agent_event_cursor := 0
+var agent_last_seen_cursor := 0
+var agent_events: Array[Dictionary] = []
+var agent_player_state: Dictionary = {}
+var agent_object_state: Dictionary = {}
+var agent_plot_state: Dictionary = {}
+var agent_seen_chat_ids: Dictionary = {}
+var agent_baseline_ready := false
 
 func _ready() -> void:
 	world.y_sort_enabled = true
@@ -87,7 +100,6 @@ func _process(delta: float) -> void:
 		return
 	frame += 1
 	client.poll()
-	_poll_agent_http()
 	_update_agent_registry(delta)
 	_run_smoke_actions()
 	_update_status()
@@ -96,6 +108,7 @@ func _process(delta: float) -> void:
 	_update_plots()
 	_update_objects()
 	_update_camera(delta)
+	_poll_agent_http()
 	_handle_interaction()
 	_handle_movement(delta)
 
@@ -147,17 +160,57 @@ func _update_status() -> void:
 func _update_world() -> void:
 	var seen := {}
 	local_identity = str(client.local_identity())
+	var record_events := agent_baseline_ready and _agent_is_logged_in()
 	for row in client.players():
 		var identity := str(row["identity"])
 		seen[identity] = true
+		var target := Vector2(float(row["x"]), float(row["y"]))
+		var display_name := str(row["display_name"])
+		var last_dx := int(row.get("last_dx", 0))
+		var last_dy := int(row.get("last_dy", 0))
+		var previous: Dictionary = agent_player_state.get(identity, {})
+		var state := {
+			"display_name": display_name,
+			"position": target,
+			"last_dx": last_dx,
+			"last_dy": last_dy,
+			"online": bool(row.get("online", true)),
+			"updated_at_micros": int(row.get("updated_at_micros", 0)),
+		}
+		if record_events:
+			if previous.is_empty():
+				_agent_record_event("player_joined", "%s appeared at %s." % [display_name, _agent_point_text(target)], target, {
+					"identity": identity,
+					"display_name": display_name,
+					"position": _agent_point(target),
+				})
+			else:
+				var old_position: Vector2 = previous["position"]
+				var old_name := str(previous["display_name"])
+				if old_position != target:
+					_agent_record_event("player_moved", "%s moved from %s to %s, now facing %s." % [display_name, _agent_point_text(old_position), _agent_point_text(target), _agent_facing_phrase(last_dx, last_dy)], target, {
+						"identity": identity,
+						"display_name": display_name,
+						"from": _agent_point(old_position),
+						"to": _agent_point(target),
+						"facing": _agent_facing_phrase(last_dx, last_dy),
+					})
+				if old_name != display_name:
+					_agent_record_event("player_renamed", "%s is now named %s." % [old_name, display_name], target, {
+						"identity": identity,
+						"old_display_name": old_name,
+						"display_name": display_name,
+						"position": _agent_point(target),
+					})
+		agent_player_state[identity] = state
 		var avatar := _avatar_for(identity)
-		avatar.set_world_target(Vector2(float(row["x"]), float(row["y"])))
-		avatar.set_meta("display_name", str(row["display_name"]))
+		avatar.set_world_target(target)
+		avatar.set_meta("display_name", display_name)
 		avatar.set_meta("avatar_color", int(row["avatar_color"]))
 		avatar.set_meta("identity", identity)
 		avatar.set_meta("is_local", identity == local_identity)
-		avatar.set_meta("last_dx", int(row.get("last_dx", 0)))
-		avatar.set_meta("last_dy", int(row.get("last_dy", 0)))
+		avatar.set_meta("last_dx", last_dx)
+		avatar.set_meta("last_dy", last_dy)
 		var bubble_info: Dictionary = chat_bubbles_by_sender.get(identity, {})
 		avatar.set_meta("bubble_body", str(bubble_info.get("body", "")))
 		avatar.set_meta("bubble_started_at", float(bubble_info.get("started_at", 0.0)))
@@ -165,36 +218,111 @@ func _update_world() -> void:
 
 	for identity in avatars.keys():
 		if not seen.has(identity):
+			if record_events and agent_player_state.has(identity):
+				var previous: Dictionary = agent_player_state[identity]
+				var previous_position: Vector2 = previous["position"]
+				var previous_name := str(previous["display_name"])
+				_agent_record_event("player_left", "%s left the visible world state." % previous_name, previous_position, {
+					"identity": identity,
+					"display_name": previous_name,
+					"last_position": _agent_point(previous_position),
+				})
+			agent_player_state.erase(identity)
 			avatars[identity].queue_free()
 			avatars.erase(identity)
 
 func _update_objects() -> void:
 	var seen := {}
+	var record_events := agent_baseline_ready and _agent_is_logged_in()
 	for row in client.world_objects():
 		var id := int(row["id"])
 		seen[id] = true
 		var object := _object_for(id)
-		object.position = Vector2(float(row["x"]), float(row["y"]))
-		object.set_meta("kind", str(row["kind"]))
-		object.set_meta("state", int(row["state"]))
+		var object_position := Vector2(float(row["x"]), float(row["y"]))
+		var kind := str(row["kind"])
+		var state := int(row["state"])
+		var previous: Dictionary = agent_object_state.get(id, {})
+		var object_state := {
+			"kind": kind,
+			"position": object_position,
+			"state": state,
+			"updated_at_micros": int(row.get("updated_at_micros", 0)),
+		}
+		if record_events:
+			if previous.is_empty():
+				_agent_record_event("object_appeared", "A %s appeared at %s." % [kind, _agent_point_text(object_position)], object_position, {
+					"id": id,
+					"kind": kind,
+					"position": _agent_point(object_position),
+					"state": state,
+				})
+			elif int(previous["state"]) != state:
+				_agent_record_event("object_changed", "The %s at %s changed state from %d to %d." % [kind, _agent_point_text(object_position), int(previous["state"]), state], object_position, {
+					"id": id,
+					"kind": kind,
+					"position": _agent_point(object_position),
+					"old_state": int(previous["state"]),
+					"state": state,
+				})
+		agent_object_state[id] = object_state
+		object.position = object_position
+		object.set_meta("kind", kind)
+		object.set_meta("state", state)
 		object.z_index = int(object.position.y) - 1
 		object.queue_redraw()
 
 	for id in world_objects.keys():
 		if not seen.has(id):
+			if record_events and agent_object_state.has(id):
+				var previous: Dictionary = agent_object_state[id]
+				var previous_position: Vector2 = previous["position"]
+				var previous_kind := str(previous["kind"])
+				_agent_record_event("object_removed", "The %s at %s disappeared." % [previous_kind, _agent_point_text(previous_position)], previous_position, {
+					"id": id,
+					"kind": previous_kind,
+					"last_position": _agent_point(previous_position),
+				})
+			agent_object_state.erase(id)
 			world_objects[id].queue_free()
 			world_objects.erase(id)
+	if _agent_is_logged_in() and not agent_baseline_ready:
+		agent_baseline_ready = true
+	elif not _agent_is_logged_in():
+		agent_baseline_ready = false
 
 func _update_plots() -> void:
+	var seen := {}
+	var record_events := agent_baseline_ready and _agent_is_logged_in()
 	player_plots.clear()
 	for row in client.player_plots():
 		var owner := str(row["owner"])
+		seen[owner] = true
+		var origin := Vector2(float(row["origin_x"]), float(row["origin_y"]))
+		var plot_size := Vector2(float(row["width"]), float(row["height"]))
+		var display_name := str(row["display_name"])
+		var previous: Dictionary = agent_plot_state.get(owner, {})
+		var state := {
+			"display_name": display_name,
+			"origin": origin,
+			"size": plot_size,
+			"assigned_at_micros": int(row.get("assigned_at_micros", 0)),
+		}
+		if record_events and previous.is_empty():
+			_agent_record_event("plot_assigned", "%s has a plot at %s." % [display_name, _agent_point_text(origin)], origin, {
+				"owner": owner,
+				"display_name": display_name,
+				"rect": _agent_rect(Rect2(origin, plot_size)),
+			})
+		agent_plot_state[owner] = state
 		player_plots[owner] = {
 			"display_name": str(row["display_name"]),
-			"origin": Vector2(float(row["origin_x"]), float(row["origin_y"])),
-			"size": Vector2(float(row["width"]), float(row["height"])),
+			"origin": origin,
+			"size": plot_size,
 			"is_local": owner == local_identity,
 		}
+	for owner in agent_plot_state.keys():
+		if not seen.has(owner):
+			agent_plot_state.erase(owner)
 
 func _ingest_chat_messages() -> String:
 	var recent := ""
@@ -214,6 +342,17 @@ func _ingest_chat_messages() -> String:
 			"started_at": now,
 		}
 		recent = "%s: %s" % [display_name, body]
+		agent_seen_chat_ids[message_id] = true
+		if agent_baseline_ready and _agent_is_logged_in():
+			var sender_position := _agent_player_position(sender)
+			_agent_record_event("chat", "%s said: %s" % [display_name, body], sender_position, {
+				"id": message_id,
+				"sender": sender,
+				"display_name": display_name,
+				"body": body,
+				"position": _agent_point(sender_position),
+				"sent_at_micros": int(row.get("sent_at_micros", 0)),
+			})
 
 	return recent
 
@@ -393,7 +532,32 @@ func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> vo
 			if method != "GET":
 				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /snapshot."})
 			else:
-				_send_agent_http_json(peer, 200, _agent_snapshot())
+				_send_agent_http_json(peer, 200, _agent_snapshot(true))
+		"/delta":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /delta, optionally with ?since=<cursor>."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_delta_response(_agent_since_from_query(query), true))
+		"/move":
+			if method != "POST" and method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /move with JSON like {\"direction\":\"east\",\"steps\":3}."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_move(request["body"], query))
+		"/chat":
+			if method != "POST" and method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /chat with JSON like {\"body\":\"Hello\"}."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_chat(request["body"], query))
+		"/place":
+			if method != "POST" and method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /place with JSON like {\"kind\":\"flower\"}."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_place(request["body"], query))
+		"/interact":
+			if method != "POST" and method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /interact."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_interact(query))
 		"/screenshot":
 			if method != "GET":
 				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /screenshot, optionally with ?size=bigger or ?size=max."})
@@ -485,7 +649,12 @@ func _agent_help() -> Dictionary:
 		"registry_path": agent_registry_path,
 		"endpoints": [
 			"GET /snapshot - camera-scoped text/JSON snapshot of the current view",
+			"GET /delta - camera-scoped text events since your last look, or ?since=<cursor>",
 			"POST /login - join gently; JSON body may include display_name",
+			"POST /move - move by direction and optional steps",
+			"POST /chat - send a chat message",
+			"POST /place - place flower, button, sign, or rock in front of you",
+			"POST /interact - interact with the nearby object you face",
 			"GET /screenshot - JPEG, downsampled to fit 1024x768",
 			"GET /screenshot?size=bigger - PNG, downsampled to fit 1280x720",
 			"GET /screenshot?size=max - PNG, downsampled to fit 1920x1080",
@@ -493,6 +662,7 @@ func _agent_help() -> Dictionary:
 		"notes": [
 			"No stream endpoint exists yet.",
 			"The snapshot describes only what is inside the current camera view.",
+			"Action endpoints include a delta and advance your cursor.",
 			"If a response says you are not logged in, call POST /login and retry after a moment.",
 		],
 	}
@@ -514,12 +684,14 @@ func _agent_login(body: String, query: Dictionary) -> Dictionary:
 			"display_name": _agent_local_display_name(),
 			"identity": local_identity,
 			"message": "Successfully logged in as %s." % _agent_local_display_name(),
+			"delta": _agent_delta_payload(agent_last_seen_cursor, true),
 		}
 
 	if client == null:
 		return {
 			"ok": false,
 			"message": "The Tiny Grove client is not ready yet. Wait a moment, then call POST /login again.",
+			"delta": _agent_delta_payload(agent_last_seen_cursor, true),
 		}
 
 	if not bool(client.call("is_connected")):
@@ -528,26 +700,30 @@ func _agent_login(body: String, query: Dictionary) -> Dictionary:
 			"message": "The Godot client is not connected to SpacetimeDB yet. Start the Tiny Grove dev server, wait for the client to connect, then call POST /login again.",
 			"status": client.status(),
 			"last_error": client.last_error(),
+			"delta": _agent_delta_payload(agent_last_seen_cursor, true),
 		}
 
 	name_edit.text = requested_name
 	var color := Color.from_hsv(randf(), 0.58, 0.9).to_rgba32()
 	var sent: bool = client.join_game(requested_name, color)
+	_agent_settle_after_action()
 	if sent:
 		return {
 			"ok": true,
 			"already_logged_in": false,
 			"display_name": requested_name,
 			"message": "Login requested as %s. Call GET /snapshot after a moment; if it still says not logged in, retry once." % requested_name,
+			"delta": _agent_delta_payload(agent_last_seen_cursor, true),
 		}
 	return {
 		"ok": false,
 		"message": "The login request could not be sent. Check GET /snapshot for connection status, then retry POST /login.",
 		"status": client.status(),
 		"last_error": client.last_error(),
+		"delta": _agent_delta_payload(agent_last_seen_cursor, true),
 	}
 
-func _agent_snapshot() -> Dictionary:
+func _agent_snapshot(advance_cursor := false) -> Dictionary:
 	var view_rect := _agent_visible_world_rect()
 	var logged_in := _agent_is_logged_in()
 	var local_avatar: AvatarNode = avatars.get(local_identity, null)
@@ -583,7 +759,118 @@ func _agent_snapshot() -> Dictionary:
 		"visible_chat_bubbles": visible_bubbles,
 		"visible_plots": visible_plots,
 		"visible_objects": visible_objects,
+		"delta": _agent_delta_payload(agent_last_seen_cursor, advance_cursor),
 		"hints": hints,
+	}
+
+func _agent_move(body: String, query: Dictionary) -> Dictionary:
+	var payload := _agent_json_payload(body)
+	var direction := str(query.get("direction", payload.get("direction", ""))).strip_edges().to_lower()
+	var dx := int(query.get("dx", payload.get("dx", 0)))
+	var dy := int(query.get("dy", payload.get("dy", 0)))
+	if not direction.is_empty():
+		var direction_axis := _agent_direction_to_axis(direction)
+		dx = int(direction_axis.x)
+		dy = int(direction_axis.y)
+	var steps := int(query.get("steps", payload.get("steps", 1)))
+	steps = clampi(steps, 1, AGENT_MAX_MOVE_STEPS)
+
+	var result := _agent_action_base("move")
+	if not result["ok"]:
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
+	if dx == 0 and dy == 0:
+		result["ok"] = false
+		result["message"] = "Choose a direction: north, south, east, west, up, down, left, right, or provide dx/dy."
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
+
+	var sent := 0
+	for _index in range(steps):
+		if client.move_player(dx, dy):
+			sent += 1
+		else:
+			break
+	_agent_settle_after_action()
+	result["ok"] = sent > 0
+	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
+	result["message"] = "Moved %d step(s) %s." % [sent, _agent_facing_phrase(dx, dy)] if sent > 0 and int(delta["visible_event_count"]) > 0 else "Move request was sent, but no visible movement delta arrived yet." if sent > 0 else "Move request could not be sent."
+	result["requested_steps"] = steps
+	result["sent_steps"] = sent
+	result["delta"] = delta
+	result["you"] = _agent_you_dictionary(avatars.get(local_identity, null))
+	return result
+
+func _agent_chat(body: String, query: Dictionary) -> Dictionary:
+	var payload := _agent_json_payload(body)
+	var chat_body := str(query.get("body", payload.get("body", ""))).strip_edges()
+	var result := _agent_action_base("chat")
+	if not result["ok"]:
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
+	if chat_body.is_empty():
+		result["ok"] = false
+		result["message"] = "Provide a chat body, for example POST /chat with {\"body\":\"Hello\"}."
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
+
+	var sent: bool = client.send_chat(chat_body)
+	_agent_settle_after_action()
+	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
+	result["ok"] = sent
+	result["message"] = "Sent chat: %s" % chat_body if sent and int(delta["visible_event_count"]) > 0 else "Chat request was sent, but no visible chat delta arrived yet." if sent else "Chat request could not be sent."
+	result["delta"] = delta
+	return result
+
+func _agent_place(body: String, query: Dictionary) -> Dictionary:
+	var payload := _agent_json_payload(body)
+	var kind := str(query.get("kind", payload.get("kind", "flower"))).strip_edges().to_lower()
+	var result := _agent_action_base("place")
+	if not result["ok"]:
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
+	if kind.is_empty():
+		kind = "flower"
+
+	var sent: bool = client.place_object(kind)
+	_agent_settle_after_action()
+	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
+	result["ok"] = sent
+	result["message"] = "Placed %s in front of you." % kind if sent and int(delta["visible_event_count"]) > 0 else "Place request was sent, but no visible object delta arrived. The server may have rejected it, or the target may be outside the camera view." if sent else "Place request could not be sent. You may be outside your plot or the target tile may already be occupied."
+	result["kind"] = kind
+	result["delta"] = delta
+	return result
+
+func _agent_interact(query: Dictionary) -> Dictionary:
+	var result := _agent_action_base("interact")
+	if not result["ok"]:
+		result["delta"] = _agent_delta_payload(_agent_since_from_query(query), true)
+		return result
+
+	var sent: bool = client.interact_near()
+	_agent_settle_after_action()
+	var delta := _agent_delta_payload(_agent_since_from_query(query), true)
+	result["ok"] = sent
+	result["message"] = "Interacted with the nearby object you are facing." if sent and int(delta["visible_event_count"]) > 0 else "Interact request was sent, but no visible delta arrived. There may be nothing nearby or the interaction may have no visible effect." if sent else "Interact request could not be sent. There may be nothing nearby."
+	result["delta"] = delta
+	return result
+
+func _agent_action_base(action_name: String) -> Dictionary:
+	if not _agent_is_logged_in():
+		return {
+			"ok": false,
+			"action": action_name,
+			"message": "You are not logged in. Call POST /login with {\"display_name\":\"Agent\"}, wait a moment, then retry.",
+		}
+	if client == null or not bool(client.call("is_connected")):
+		return {
+			"ok": false,
+			"action": action_name,
+			"message": "The Godot client is not connected to SpacetimeDB. Start the dev server, wait for connection, then retry.",
+		}
+	return {
+		"ok": true,
+		"action": action_name,
 	}
 
 func _agent_visible_world_rect() -> Rect2:
@@ -850,6 +1137,143 @@ func _write_agent_registry() -> void:
 func _remove_agent_registry() -> void:
 	if not agent_registry_path.is_empty() and FileAccess.file_exists(agent_registry_path):
 		DirAccess.remove_absolute(agent_registry_path)
+
+func _agent_json_payload(body: String) -> Dictionary:
+	if body.strip_edges().is_empty():
+		return {}
+	var parsed: Variant = JSON.parse_string(body)
+	if typeof(parsed) == TYPE_DICTIONARY:
+		return parsed
+	return {}
+
+func _agent_direction_to_axis(direction: String) -> Vector2i:
+	match direction:
+		"north", "up":
+			return Vector2i(0, -1)
+		"south", "down":
+			return Vector2i(0, 1)
+		"west", "left":
+			return Vector2i(-1, 0)
+		"east", "right":
+			return Vector2i(1, 0)
+		"northwest", "north-west", "up-left":
+			return Vector2i(-1, -1)
+		"northeast", "north-east", "up-right":
+			return Vector2i(1, -1)
+		"southwest", "south-west", "down-left":
+			return Vector2i(-1, 1)
+		"southeast", "south-east", "down-right":
+			return Vector2i(1, 1)
+		_:
+			return Vector2i.ZERO
+
+func _agent_settle_after_action() -> void:
+	var started := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - started < AGENT_ACTION_SETTLE_MSEC:
+		if client != null:
+			client.poll()
+			_update_chat()
+			_update_world()
+			_update_plots()
+			_update_objects()
+			_update_camera(0.0)
+		OS.delay_msec(AGENT_ACTION_POLL_MSEC)
+
+func _agent_since_from_query(query: Dictionary) -> int:
+	if query.has("since"):
+		return int(query["since"])
+	if query.has("cursor"):
+		return int(query["cursor"])
+	return agent_last_seen_cursor
+
+func _agent_record_event(kind: String, text: String, position: Vector2, details: Dictionary) -> void:
+	agent_event_cursor += 1
+	var event := {
+		"cursor": agent_event_cursor,
+		"frame": frame,
+		"observed_unix": Time.get_unix_time_from_system(),
+		"kind": kind,
+		"text": text,
+		"position": _agent_point(position),
+		"details": details,
+	}
+	agent_events.append(event)
+	while agent_events.size() > AGENT_MAX_STORED_EVENTS:
+		agent_events.pop_front()
+
+func _agent_delta_response(since: int, advance_cursor := true) -> Dictionary:
+	return {
+		"ok": true,
+		"logged_in": _agent_is_logged_in(),
+		"connection": {
+			"connected": client != null and bool(client.call("is_connected")),
+			"status": client.status() if client != null else "client not ready",
+			"last_error": client.last_error() if client != null else "",
+			"agent_base_url": _agent_base_url(),
+			"agent_profile": agent_profile,
+		},
+		"delta": _agent_delta_payload(since, advance_cursor),
+	}
+
+func _agent_delta_payload(since: int, advance_cursor := true) -> Dictionary:
+	var view_rect := _agent_visible_world_rect()
+	var visible_events := []
+	var hidden_count := 0
+	var omitted_count := 0
+	for event in agent_events:
+		var cursor := int(event["cursor"])
+		if cursor <= since:
+			continue
+		if not _agent_event_in_view(event, view_rect):
+			hidden_count += 1
+			continue
+		if visible_events.size() >= AGENT_MAX_DELTA_EVENTS:
+			omitted_count += 1
+			continue
+		visible_events.append(event)
+
+	var from_cursor := since
+	var to_cursor := agent_event_cursor
+	if advance_cursor:
+		agent_last_seen_cursor = to_cursor
+
+	var summary := "No visible changes since cursor %d." % from_cursor
+	if visible_events.size() > 0:
+		var pieces := []
+		for event in visible_events:
+			pieces.append(str(event["text"]))
+		summary = " ".join(pieces)
+	if omitted_count > 0:
+		summary += " %d additional visible event(s) omitted; ask with since=%d if needed." % [omitted_count, from_cursor]
+
+	return {
+		"from_cursor": from_cursor,
+		"to_cursor": to_cursor,
+		"next_since": to_cursor,
+		"advanced_cursor": advance_cursor,
+		"view_rect": _agent_rect(view_rect),
+		"max_events": AGENT_MAX_DELTA_EVENTS,
+		"events": visible_events,
+		"visible_event_count": visible_events.size(),
+		"hidden_out_of_view_count": hidden_count,
+		"omitted_visible_count": omitted_count,
+		"summary": summary,
+	}
+
+func _agent_event_in_view(event: Dictionary, view_rect: Rect2) -> bool:
+	var position: Dictionary = event.get("position", {})
+	if position.is_empty():
+		return true
+	return view_rect.has_point(Vector2(float(position.get("x", 0.0)), float(position.get("y", 0.0))))
+
+func _agent_player_position(identity: String) -> Vector2:
+	if avatars.has(identity):
+		var avatar: AvatarNode = avatars[identity]
+		return avatar.world_target
+	if agent_player_state.has(identity):
+		var state: Dictionary = agent_player_state[identity]
+		return state["position"]
+	return camera_position
 
 func _agent_fit_size(current: Vector2i, maximum: Vector2i) -> Vector2i:
 	if current.x <= maximum.x and current.y <= maximum.y:

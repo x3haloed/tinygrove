@@ -396,6 +396,10 @@ fn player_dictionary(
     dict.set("y", position.y);
     dict.set("last_dx", position.last_dx);
     dict.set("last_dy", position.last_dy);
+    dict.set(
+        "updated_at_micros",
+        position.updated_at.to_micros_since_unix_epoch(),
+    );
     dict
 }
 
@@ -410,6 +414,10 @@ fn chat_dictionary(message: &ChatMessage, player: Option<&Player>) -> Dictionary
     dict.set("sender", sender);
     dict.set("display_name", display_name);
     dict.set("body", message.body.clone());
+    dict.set(
+        "sent_at_micros",
+        message.sent_at.to_micros_since_unix_epoch(),
+    );
     dict
 }
 
@@ -421,6 +429,14 @@ fn world_object_dictionary(object: &WorldObject) -> Dictionary<Variant, Variant>
     dict.set("y", object.y);
     dict.set("state", object.state);
     dict.set("created_by", identity_key(&object.created_by));
+    dict.set(
+        "created_at_micros",
+        object.created_at.to_micros_since_unix_epoch(),
+    );
+    dict.set(
+        "updated_at_micros",
+        object.updated_at.to_micros_since_unix_epoch(),
+    );
     dict
 }
 
@@ -440,6 +456,10 @@ fn player_plot_dictionary(
     dict.set("origin_y", plot.origin_y);
     dict.set("width", plot.width);
     dict.set("height", plot.height);
+    dict.set(
+        "assigned_at_micros",
+        plot.assigned_at.to_micros_since_unix_epoch(),
+    );
     dict
 }
 

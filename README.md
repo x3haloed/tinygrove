@@ -101,6 +101,8 @@ This keeps the game playable by humans in Godot and by agents in Watch without s
 
 Published skills for agents that play Tiny Grove live in `published-skills/`, separate from `.agents/skills` repo-authoring guidance.
 
-The first published skill is `published-skills/tinygrove-player/SKILL.md`. It documents the Godot client's loopback HTTP player interface, currently supporting login, camera-scoped text snapshots, and optional screenshots. Streaming and action endpoints are intentionally not part of this first surface yet.
+The first published skill is `published-skills/tinygrove-player/SKILL.md`. It documents the Godot client's loopback HTTP player interface, currently supporting login, camera-scoped text snapshots, camera-scoped deltas, the same core controls humans have, and optional screenshots. Streaming and SSE endpoints are intentionally not part of this first surface yet.
 
 Each client writes a discovery file under `.tinygrove/agents/` with its profile, PID, port, login state, and base URL. Use `TINYGROVE_AGENT_PROFILE=agent` for agent-owned clients, `TINYGROVE_AGENT_NAME=Codex` to set the default login name, and `TINYGROVE_AGENT_PORT=37390` when a harness needs a pinned port. Without an explicit port, clients scan upward from `37373` to avoid local collisions. Agent and human profiles also use separate SpacetimeDB credential keys, so an agent client does not inherit the human player's local identity.
+
+Action endpoints such as `/move`, `/chat`, `/place`, and `/interact` return a bounded text delta and advance the agent's state cursor. Agents can also call `/delta?since=<cursor>` to revisit recent camera-scoped events without opening a stream.
