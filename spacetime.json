@@ -1,0 +1,5 @@
+{
+  "module-path": "rust/server",
+  "server": "local"
+}
+
