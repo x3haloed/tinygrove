@@ -2,6 +2,9 @@ extends Control
 
 const AVATAR_RADIUS := 14.0
 const MOVE_REPEAT_SECONDS := 0.10
+const SMOKE_JOIN_FRAME := 6
+const SMOKE_MOVE_FRAME := 18
+const SMOKE_CHAT_FRAME := 30
 
 @onready var world: Node2D = $World
 @onready var status_label: Label = $Hud/VBox/Status
@@ -14,11 +17,18 @@ const MOVE_REPEAT_SECONDS := 0.10
 var client: RefCounted
 var avatars: Dictionary = {}
 var move_elapsed := 0.0
+var frame := 0
+var smoke_enabled := false
+var smoke_name := ""
+var smoke_message := ""
+var smoke_dx := 0
+var smoke_dy := 0
 
 func _ready() -> void:
 	join_button.pressed.connect(_join_game)
 	send_button.pressed.connect(_send_chat)
 	chat_edit.text_submitted.connect(func(_text: String) -> void: _send_chat())
+	_load_smoke_config()
 	if not ClassDB.class_exists("TinyGroveClient"):
 		GDExtensionManager.load_extension("res://tinygrove_client.gdextension")
 	client = ClassDB.instantiate("TinyGroveClient")
@@ -26,7 +36,11 @@ func _ready() -> void:
 		client.connect_local()
 
 func _process(delta: float) -> void:
+	if client == null:
+		return
+	frame += 1
 	client.poll()
+	_run_smoke_actions()
 	_update_status()
 	_update_world()
 	_update_chat()
@@ -95,6 +109,33 @@ func _avatar_for(identity: String) -> Node2D:
 	world.add_child(avatar)
 	avatars[identity] = avatar
 	return avatar
+
+func _load_smoke_config() -> void:
+	smoke_enabled = OS.get_environment("TINYGROVE_SMOKE") == "1"
+	if not smoke_enabled:
+		return
+
+	smoke_name = OS.get_environment("TINYGROVE_SMOKE_NAME")
+	if smoke_name.is_empty():
+		smoke_name = "Smoke"
+	smoke_message = OS.get_environment("TINYGROVE_SMOKE_MESSAGE")
+	if smoke_message.is_empty():
+		smoke_message = "smoke message"
+	smoke_dx = int(OS.get_environment("TINYGROVE_SMOKE_DX"))
+	smoke_dy = int(OS.get_environment("TINYGROVE_SMOKE_DY"))
+	name_edit.text = smoke_name
+	chat_edit.text = smoke_message
+
+func _run_smoke_actions() -> void:
+	if not smoke_enabled:
+		return
+
+	if frame == SMOKE_JOIN_FRAME:
+		client.join_game(smoke_name, Color.from_hsv(randf(), 0.58, 0.9).to_rgba32())
+	elif frame == SMOKE_MOVE_FRAME:
+		client.move_player(smoke_dx, smoke_dy)
+	elif frame == SMOKE_CHAT_FRAME:
+		client.send_chat(smoke_message)
 
 class AvatarNode:
 	extends Node2D

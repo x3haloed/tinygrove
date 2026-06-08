@@ -18,6 +18,7 @@ cargo xtask check
 cargo xtask dev
 cargo xtask client build
 cargo xtask db describe
+cargo xtask smoke two-clients
 ```
 
 `cargo xtask dev` assumes a local SpacetimeDB server is already running. Start
@@ -30,3 +31,4 @@ The first multiplayer slice is intentionally small:
 - Clients send reducer intents; they do not mutate game state directly.
 - Generated Rust bindings belong in `rust/client/generated`.
 - The Godot Rust extension is built and staged with `cargo xtask client build`.
+- The repeatable local replication smoke test is `cargo xtask smoke two-clients`.

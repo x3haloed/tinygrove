@@ -29,6 +29,7 @@ Current front-door commands:
 - `cargo xtask db describe`: describe the local database schema as JSON.
 - `cargo xtask client build`: build and stage the Godot Rust extension into `godot/bin/`.
 - `cargo xtask godot run`: launch the Godot project.
+- `cargo xtask smoke two-clients`: run two headless Godot clients against local SpacetimeDB and verify replicated player/chat rows.
 - `cargo xtask dev`: publish, generate, build the client extension, then launch Godot; it assumes the local DB server is already running.
 
 Keep `cargo xtask` usable from the repo root. It may also work from `rust/`, but root use is the default orientation for humans.

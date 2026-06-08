@@ -48,6 +48,7 @@ cargo xtask check
 cargo xtask db build
 cargo xtask client build
 cargo xtask db describe
+cargo xtask smoke two-clients
 ```
 
 `cargo xtask dev` publishes the module, regenerates bindings, and launches Godot. It assumes a local SpacetimeDB server is already running.
@@ -80,3 +81,5 @@ The next milestone is a true vertical slice:
 - unsupported client protocol versions are rejected or surfaced clearly
 
 After that, the project can grow toward world chunks, tile placement, and declarative player-authored interactions.
+
+Run `cargo xtask smoke two-clients` to exercise the current vertical slice with two headless Godot clients against a local SpacetimeDB server.

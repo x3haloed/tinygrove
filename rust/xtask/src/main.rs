@@ -2,7 +2,9 @@ use std::{
     env,
     ffi::OsStr,
     path::{Path, PathBuf},
-    process::{Command, ExitCode, Stdio},
+    process::{Child, Command, ExitCode, Stdio},
+    thread,
+    time::Duration,
 };
 
 const DB_NAME: &str = "tinygrove-dev";
@@ -29,6 +31,7 @@ fn main() -> ExitCode {
         [cmd, subcmd] if cmd == "db" && subcmd == "describe" => db_describe(),
         [cmd, subcmd] if cmd == "client" && subcmd == "build" => client_build(),
         [cmd, subcmd] if cmd == "godot" && subcmd == "run" => godot_run(),
+        [cmd, subcmd] if cmd == "smoke" && subcmd == "two-clients" => smoke_two_clients(),
         _ => Err(format!("Unknown command: {}", args.join(" "))),
     };
 
@@ -60,6 +63,8 @@ Commands:
   db describe   Describe the local database schema
   client build  Build and stage the Godot Rust extension
   godot run     Launch the Godot project
+  smoke two-clients
+                Run two headless Godot clients and verify replicated DB rows
 "
     );
 }
@@ -180,6 +185,52 @@ fn godot_run() -> Result<(), String> {
     exec("godot", ["--path", "godot"], repo_dir())
 }
 
+fn smoke_two_clients() -> Result<(), String> {
+    client_build()?;
+
+    let mut server = spawn(
+        "spacetime",
+        [
+            "start",
+            "--listen-addr",
+            SPACETIME_LISTEN_ADDR,
+            "--data-dir",
+            ".spacetime-data",
+            "--non-interactive",
+        ],
+        repo_dir(),
+        &[],
+    )?;
+
+    let result = (|| {
+        thread::sleep(Duration::from_millis(1200));
+        db_publish()?;
+
+        let mut grove = spawn_smoke_client("Grove", "hello from Grove", 1, 0)?;
+        let mut moss = spawn_smoke_client("Moss", "hello from Moss", 0, 1)?;
+        wait_child("Godot smoke client Grove", &mut grove)?;
+        wait_child("Godot smoke client Moss", &mut moss)?;
+
+        let players = sql("SELECT * FROM player")?;
+        require_contains(&players, "Grove", "player query")?;
+        require_contains(&players, "Moss", "player query")?;
+
+        let positions = sql("SELECT * FROM player_position")?;
+        require_contains(&positions, "16", "position query")?;
+
+        let chat = sql("SELECT * FROM chat_message")?;
+        require_contains(&chat, "hello from Grove", "chat query")?;
+        require_contains(&chat, "hello from Moss", "chat query")?;
+
+        println!("smoke two-clients: replicated players, positions, and chat");
+        Ok(())
+    })();
+
+    stop_child(&mut server);
+    let _ = std::fs::remove_dir_all(repo_dir().join(".spacetime-data"));
+    result
+}
+
 fn check_tool<const N: usize>(program: &str, args: [&str; N]) -> Result<(), String> {
     let output = Command::new(program)
         .args(args)
@@ -212,6 +263,95 @@ where
         Ok(())
     } else {
         Err(format!("`{program}` exited with {status}"))
+    }
+}
+
+fn output<I, S>(program: &str, args: I, cwd: PathBuf) -> Result<String, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|error| format!("failed to run `{program}`: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "`{program}` exited with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn spawn<I, S>(program: &str, args: I, cwd: PathBuf, envs: &[(&str, &str)]) -> Result<Child, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .envs(envs.iter().copied())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| format!("failed to spawn `{program}`: {error}"))
+}
+
+fn wait_child(label: &str, child: &mut Child) -> Result<(), String> {
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for {label}: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{label} exited with {status}"))
+    }
+}
+
+fn stop_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn spawn_smoke_client(name: &str, message: &str, dx: i32, dy: i32) -> Result<Child, String> {
+    let dx = dx.to_string();
+    let dy = dy.to_string();
+    spawn(
+        "godot",
+        ["--headless", "--path", "godot", "--quit-after", "90"],
+        repo_dir(),
+        &[
+            ("TINYGROVE_SMOKE", "1"),
+            ("TINYGROVE_SMOKE_NAME", name),
+            ("TINYGROVE_SMOKE_MESSAGE", message),
+            ("TINYGROVE_SMOKE_DX", &dx),
+            ("TINYGROVE_SMOKE_DY", &dy),
+        ],
+    )
+}
+
+fn sql(query: &str) -> Result<String, String> {
+    output(
+        "spacetime",
+        ["sql", DB_NAME, query, "--server", "local", "--yes"],
+        repo_dir(),
+    )
+}
+
+fn require_contains(haystack: &str, needle: &str, label: &str) -> Result<(), String> {
+    if haystack.contains(needle) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} did not contain `{needle}`\noutput:\n{haystack}"
+        ))
     }
 }
 
