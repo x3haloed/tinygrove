@@ -16,6 +16,15 @@ const STATUS_MAX_CHARS := 92
 const BUBBLE_VISIBLE_SECONDS := 3.5
 const BUBBLE_FADE_SECONDS := 1.1
 const BUBBLE_MAX_CHARS := 28
+const AGENT_HTTP_HOST := "127.0.0.1"
+const AGENT_HTTP_PORT := 37373
+const AGENT_HTTP_PORT_SCAN_COUNT := 32
+const AGENT_REGISTRY_RELATIVE_DIR := "../.tinygrove/agents"
+const AGENT_REGISTRY_WRITE_SECONDS := 1.0
+const AGENT_MAX_INDIVIDUAL_OBJECTS := 40
+const AGENT_DEFAULT_SCREENSHOT_MAX := Vector2i(1024, 768)
+const AGENT_BIGGER_SCREENSHOT_MAX := Vector2i(1280, 720)
+const AGENT_MAX_SCREENSHOT_MAX := Vector2i(1920, 1080)
 
 @onready var world: Node2D = $World
 @onready var status_label: Label = $Hud/VBox/Status
@@ -43,6 +52,13 @@ var smoke_message := ""
 var smoke_dx := 0
 var smoke_dy := 0
 var smoke_object_kind := ""
+var agent_server := TCPServer.new()
+var agent_connections: Array[Dictionary] = []
+var agent_http_status := ""
+var agent_http_port := 0
+var agent_profile := "human"
+var agent_registry_path := ""
+var agent_registry_elapsed := 0.0
 
 func _ready() -> void:
 	world.y_sort_enabled = true
@@ -57,17 +73,22 @@ func _ready() -> void:
 	send_button.pressed.connect(_send_chat)
 	chat_edit.text_submitted.connect(func(_text: String) -> void: _send_chat())
 	_load_smoke_config()
+	_load_agent_config()
 	if not ClassDB.class_exists("TinyGroveClient"):
 		GDExtensionManager.load_extension("res://tinygrove_client.gdextension")
 	client = ClassDB.instantiate("TinyGroveClient")
 	if client != null:
-		client.connect_local()
+		client.connect_local_with_profile(agent_profile)
+	_start_agent_http()
 
 func _process(delta: float) -> void:
 	if client == null:
+		_poll_agent_http()
 		return
 	frame += 1
 	client.poll()
+	_poll_agent_http()
+	_update_agent_registry(delta)
 	_run_smoke_actions()
 	_update_status()
 	_update_chat()
@@ -77,6 +98,10 @@ func _process(delta: float) -> void:
 	_update_camera(delta)
 	_handle_interaction()
 	_handle_movement(delta)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
+		_remove_agent_registry()
 
 func _join_game() -> void:
 	var color := Color.from_hsv(randf(), 0.58, 0.9).to_rgba32()
@@ -131,6 +156,8 @@ func _update_world() -> void:
 		avatar.set_meta("avatar_color", int(row["avatar_color"]))
 		avatar.set_meta("identity", identity)
 		avatar.set_meta("is_local", identity == local_identity)
+		avatar.set_meta("last_dx", int(row.get("last_dx", 0)))
+		avatar.set_meta("last_dy", int(row.get("last_dy", 0)))
 		var bubble_info: Dictionary = chat_bubbles_by_sender.get(identity, {})
 		avatar.set_meta("bubble_body", str(bubble_info.get("body", "")))
 		avatar.set_meta("bubble_started_at", float(bubble_info.get("started_at", 0.0)))
@@ -275,6 +302,623 @@ func _short_error(error: String) -> String:
 	if compact.length() > STATUS_MAX_CHARS:
 		return compact.substr(0, STATUS_MAX_CHARS - 3) + "..."
 	return compact
+
+func _start_agent_http() -> void:
+	var preferred_port := int(OS.get_environment("TINYGROVE_AGENT_PORT"))
+	if preferred_port <= 0:
+		preferred_port = AGENT_HTTP_PORT
+
+	var exact_port := not OS.get_environment("TINYGROVE_AGENT_PORT").strip_edges().is_empty()
+	var ports_to_try := 1 if exact_port else AGENT_HTTP_PORT_SCAN_COUNT
+	for offset in range(ports_to_try):
+		var candidate_port := preferred_port + offset
+		var error := agent_server.listen(candidate_port, AGENT_HTTP_HOST)
+		if error == OK:
+			agent_http_port = candidate_port
+			agent_http_status = "Agent loopback listening at http://%s:%d (%s)" % [AGENT_HTTP_HOST, agent_http_port, agent_profile]
+			_write_agent_registry()
+			return
+
+	agent_http_status = "Agent loopback failed to listen on %s starting at %d for profile %s" % [AGENT_HTTP_HOST, preferred_port, agent_profile]
+	push_warning(agent_http_status)
+
+func _load_agent_config() -> void:
+	agent_profile = OS.get_environment("TINYGROVE_AGENT_PROFILE").strip_edges()
+	if agent_profile.is_empty():
+		agent_profile = "human"
+
+func _poll_agent_http() -> void:
+	if agent_server.is_listening():
+		while agent_server.is_connection_available():
+			var peer := agent_server.take_connection()
+			agent_connections.append({"peer": peer, "buffer": ""})
+
+	var finished: Array[Dictionary] = []
+	for connection in agent_connections:
+		var peer: StreamPeerTCP = connection["peer"]
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			finished.append(connection)
+			continue
+
+		var available := peer.get_available_bytes()
+		if available > 0:
+			connection["buffer"] = str(connection["buffer"]) + peer.get_utf8_string(available)
+
+		var request_text := str(connection["buffer"])
+		if _agent_http_request_complete(request_text):
+			_handle_agent_http_request(peer, request_text)
+			peer.disconnect_from_host()
+			finished.append(connection)
+
+	for connection in finished:
+		agent_connections.erase(connection)
+
+func _agent_http_request_complete(request_text: String) -> bool:
+	var header_end := request_text.find("\r\n\r\n")
+	if header_end == -1:
+		return false
+
+	var content_length := 0
+	var headers := request_text.substr(0, header_end).split("\r\n")
+	for header in headers:
+		var separator := header.find(":")
+		if separator == -1:
+			continue
+		if header.substr(0, separator).strip_edges().to_lower() == "content-length":
+			content_length = int(header.substr(separator + 1).strip_edges())
+			break
+
+	var received_body_length := request_text.length() - header_end - 4
+	return received_body_length >= content_length
+
+func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> void:
+	var request := _parse_agent_http_request(request_text)
+	var method: String = request["method"]
+	var path: String = request["path"]
+	var query: Dictionary = request["query"]
+
+	if method == "OPTIONS":
+		_send_agent_http_bytes(peer, 204, "text/plain; charset=utf-8", PackedByteArray())
+		return
+
+	match path:
+		"/", "/help":
+			_send_agent_http_json(peer, 200, _agent_help())
+		"/login":
+			if method != "POST" and method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /login with optional JSON like {\"display_name\":\"Agent\"}."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_login(request["body"], query))
+		"/snapshot":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /snapshot."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_snapshot())
+		"/screenshot":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /screenshot, optionally with ?size=bigger or ?size=max."})
+			else:
+				var screenshot := _agent_screenshot(str(query.get("size", "default")))
+				_send_agent_http_bytes(peer, 200, screenshot["content_type"], screenshot["bytes"])
+		_:
+			_send_agent_http_json(peer, 404, {"ok": false, "message": "Unknown Tiny Grove agent endpoint. Try GET /help."})
+
+func _parse_agent_http_request(request_text: String) -> Dictionary:
+	var header_end := request_text.find("\r\n\r\n")
+	var head := request_text.substr(0, header_end)
+	var body := request_text.substr(header_end + 4)
+	var lines := head.split("\r\n")
+	var request_line := str(lines[0]).split(" ")
+	var method := "GET"
+	var raw_path := "/"
+	if request_line.size() >= 2:
+		method = str(request_line[0]).to_upper()
+		raw_path = str(request_line[1])
+
+	var path := raw_path
+	var query := {}
+	var query_start := raw_path.find("?")
+	if query_start != -1:
+		path = raw_path.substr(0, query_start)
+		query = _parse_agent_query(raw_path.substr(query_start + 1))
+
+	return {
+		"method": method,
+		"path": path,
+		"query": query,
+		"body": body,
+	}
+
+func _parse_agent_query(query_text: String) -> Dictionary:
+	var query := {}
+	if query_text.is_empty():
+		return query
+
+	for part in query_text.split("&", false):
+		var separator := str(part).find("=")
+		if separator == -1:
+			query[str(part).uri_decode()] = ""
+		else:
+			var key := str(part).substr(0, separator).uri_decode()
+			var value := str(part).substr(separator + 1).uri_decode()
+			query[key] = value
+	return query
+
+func _send_agent_http_json(peer: StreamPeerTCP, status_code: int, data: Dictionary) -> void:
+	var body := JSON.stringify(data, "\t").to_utf8_buffer()
+	_send_agent_http_bytes(peer, status_code, "application/json; charset=utf-8", body)
+
+func _send_agent_http_bytes(peer: StreamPeerTCP, status_code: int, content_type: String, body: PackedByteArray) -> void:
+	var reason := "OK"
+	match status_code:
+		204:
+			reason = "No Content"
+		404:
+			reason = "Not Found"
+		405:
+			reason = "Method Not Allowed"
+		_:
+			reason = "OK"
+	var header_text := "\r\n".join([
+		"HTTP/1.1 %d %s" % [status_code, reason],
+		"Content-Type: %s" % content_type,
+		"Content-Length: %d" % body.size(),
+		"Access-Control-Allow-Origin: *",
+		"Access-Control-Allow-Methods: GET, POST, OPTIONS",
+		"Access-Control-Allow-Headers: Content-Type",
+		"Connection: close",
+		"",
+		"",
+	])
+	var headers := header_text.to_utf8_buffer()
+	var response := PackedByteArray()
+	response.append_array(headers)
+	response.append_array(body)
+	peer.put_data(response)
+
+func _agent_help() -> Dictionary:
+	return {
+		"ok": true,
+		"name": "Tiny Grove agent loopback",
+		"base_url": _agent_base_url(),
+		"profile": agent_profile,
+		"registry_path": agent_registry_path,
+		"endpoints": [
+			"GET /snapshot - camera-scoped text/JSON snapshot of the current view",
+			"POST /login - join gently; JSON body may include display_name",
+			"GET /screenshot - JPEG, downsampled to fit 1024x768",
+			"GET /screenshot?size=bigger - PNG, downsampled to fit 1280x720",
+			"GET /screenshot?size=max - PNG, downsampled to fit 1920x1080",
+		],
+		"notes": [
+			"No stream endpoint exists yet.",
+			"The snapshot describes only what is inside the current camera view.",
+			"If a response says you are not logged in, call POST /login and retry after a moment.",
+		],
+	}
+
+func _agent_login(body: String, query: Dictionary) -> Dictionary:
+	var requested_name := str(query.get("display_name", "")).strip_edges()
+	var parsed: Variant = JSON.parse_string(body) if not body.strip_edges().is_empty() else null
+	if requested_name.is_empty() and typeof(parsed) == TYPE_DICTIONARY:
+		requested_name = str(parsed.get("display_name", "")).strip_edges()
+	if requested_name.is_empty():
+		requested_name = OS.get_environment("TINYGROVE_AGENT_NAME").strip_edges()
+	if requested_name.is_empty():
+		requested_name = "Agent"
+
+	if _agent_is_logged_in():
+		return {
+			"ok": true,
+			"already_logged_in": true,
+			"display_name": _agent_local_display_name(),
+			"identity": local_identity,
+			"message": "Successfully logged in as %s." % _agent_local_display_name(),
+		}
+
+	if client == null:
+		return {
+			"ok": false,
+			"message": "The Tiny Grove client is not ready yet. Wait a moment, then call POST /login again.",
+		}
+
+	if not bool(client.call("is_connected")):
+		return {
+			"ok": false,
+			"message": "The Godot client is not connected to SpacetimeDB yet. Start the Tiny Grove dev server, wait for the client to connect, then call POST /login again.",
+			"status": client.status(),
+			"last_error": client.last_error(),
+		}
+
+	name_edit.text = requested_name
+	var color := Color.from_hsv(randf(), 0.58, 0.9).to_rgba32()
+	var sent: bool = client.join_game(requested_name, color)
+	if sent:
+		return {
+			"ok": true,
+			"already_logged_in": false,
+			"display_name": requested_name,
+			"message": "Login requested as %s. Call GET /snapshot after a moment; if it still says not logged in, retry once." % requested_name,
+		}
+	return {
+		"ok": false,
+		"message": "The login request could not be sent. Check GET /snapshot for connection status, then retry POST /login.",
+		"status": client.status(),
+		"last_error": client.last_error(),
+	}
+
+func _agent_snapshot() -> Dictionary:
+	var view_rect := _agent_visible_world_rect()
+	var logged_in := _agent_is_logged_in()
+	var local_avatar: AvatarNode = avatars.get(local_identity, null)
+	var local_position := local_avatar.world_target if local_avatar != null else view_rect.get_center()
+	var visible_players := _agent_visible_players(view_rect, local_position)
+	var visible_plots := _agent_visible_plots(view_rect)
+	var visible_objects := _agent_visible_objects(view_rect, local_position)
+	var visible_bubbles := _agent_visible_bubbles(view_rect)
+	var hints := []
+	if not logged_in:
+		hints.append("You are not logged in. Call POST /login with JSON like {\"display_name\":\"Agent\"}, then retry GET /snapshot.")
+
+	return {
+		"ok": true,
+		"logged_in": logged_in,
+		"connection": {
+			"connected": client != null and bool(client.call("is_connected")),
+			"status": client.status() if client != null else "client not ready",
+			"last_error": client.last_error() if client != null else "",
+			"agent_http": agent_http_status,
+			"agent_profile": agent_profile,
+			"agent_base_url": _agent_base_url(),
+			"agent_registry_path": agent_registry_path,
+		},
+		"you": _agent_you_dictionary(local_avatar),
+		"camera": {
+			"center": _agent_point(camera_position),
+			"view_rect": _agent_rect(view_rect),
+			"note": "All players, objects, plots, and chat bubbles below are constrained to this camera view.",
+		},
+		"summary": _agent_snapshot_summary(logged_in, local_avatar, view_rect, visible_players, visible_objects),
+		"visible_players": visible_players,
+		"visible_chat_bubbles": visible_bubbles,
+		"visible_plots": visible_plots,
+		"visible_objects": visible_objects,
+		"hints": hints,
+	}
+
+func _agent_visible_world_rect() -> Rect2:
+	var viewport_size := size
+	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		viewport_size = get_viewport_rect().size
+	return Rect2(camera_position - viewport_size * 0.5, viewport_size)
+
+func _agent_is_logged_in() -> bool:
+	return not local_identity.is_empty() and avatars.has(local_identity)
+
+func _agent_local_display_name() -> String:
+	if _agent_is_logged_in():
+		var avatar: AvatarNode = avatars[local_identity]
+		return str(avatar.get_meta("display_name", name_edit.text))
+	if not name_edit.text.strip_edges().is_empty():
+		return name_edit.text.strip_edges()
+	return "Agent"
+
+func _agent_you_dictionary(local_avatar: AvatarNode) -> Dictionary:
+	if local_avatar == null:
+		return {
+			"logged_in": false,
+			"instruction": "Call POST /login with optional JSON like {\"display_name\":\"Agent\"}.",
+		}
+
+	return {
+		"logged_in": true,
+		"identity": local_identity,
+		"display_name": str(local_avatar.get_meta("display_name", "Player")),
+		"position": _agent_point(local_avatar.world_target),
+		"facing": _agent_facing_phrase(int(local_avatar.get_meta("last_dx", 0)), int(local_avatar.get_meta("last_dy", 0))),
+	}
+
+func _agent_visible_players(view_rect: Rect2, local_position: Vector2) -> Array:
+	var players := []
+	for identity in avatars.keys():
+		var avatar: AvatarNode = avatars[identity]
+		if not view_rect.has_point(avatar.world_target):
+			continue
+		players.append({
+			"identity": identity,
+			"display_name": str(avatar.get_meta("display_name", "Player")),
+			"position": _agent_point(avatar.world_target),
+			"relative_to_you": _agent_relative_phrase(local_position, avatar.world_target),
+			"facing": _agent_facing_phrase(int(avatar.get_meta("last_dx", 0)), int(avatar.get_meta("last_dy", 0))),
+			"is_you": identity == local_identity,
+			"online": true,
+		})
+	return players
+
+func _agent_visible_bubbles(view_rect: Rect2) -> Array:
+	var bubbles := []
+	var now := Time.get_ticks_msec() / 1000.0
+	for identity in avatars.keys():
+		var avatar: AvatarNode = avatars[identity]
+		if not view_rect.has_point(avatar.world_target):
+			continue
+		var body := str(avatar.get_meta("bubble_body", ""))
+		if body.is_empty():
+			continue
+		var started_at := float(avatar.get_meta("bubble_started_at", 0.0))
+		var age := now - started_at
+		if age > BUBBLE_VISIBLE_SECONDS + BUBBLE_FADE_SECONDS:
+			continue
+		bubbles.append({
+			"speaker": str(avatar.get_meta("display_name", "Player")),
+			"position": _agent_point(avatar.world_target),
+			"preview": body.substr(0, BUBBLE_MAX_CHARS) + ("..." if body.length() > BUBBLE_MAX_CHARS else ""),
+			"age_seconds": snappedf(age, 0.1),
+		})
+	return bubbles
+
+func _agent_visible_plots(view_rect: Rect2) -> Array:
+	var plots := []
+	for owner in player_plots.keys():
+		var plot: Dictionary = player_plots[owner]
+		var rect := Rect2(plot["origin"], plot["size"])
+		if not rect.intersects(view_rect, true):
+			continue
+		plots.append({
+			"owner": owner,
+			"display_name": str(plot["display_name"]),
+			"is_yours": bool(plot["is_local"]),
+			"rect": _agent_rect(rect),
+		})
+	return plots
+
+func _agent_visible_objects(view_rect: Rect2, local_position: Vector2) -> Dictionary:
+	var objects := []
+	for id in world_objects.keys():
+		var object: Node2D = world_objects[id]
+		if not view_rect.has_point(object.position):
+			continue
+		var kind := str(object.get_meta("kind", "object"))
+		var priority := 0 if kind == "button" or kind == "sign" else 1
+		objects.append({
+			"id": id,
+			"kind": kind,
+			"state": int(object.get_meta("state", 0)),
+			"position": _agent_point(object.position),
+			"relative_to_you": _agent_relative_phrase(local_position, object.position),
+			"view_area": _agent_area_phrase(object.position, view_rect),
+			"_priority": priority,
+			"_distance": local_position.distance_squared_to(object.position),
+		})
+
+	objects.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["_priority"]) != int(b["_priority"]):
+			return int(a["_priority"]) < int(b["_priority"])
+		return float(a["_distance"]) < float(b["_distance"])
+	)
+
+	var included := []
+	var overflow := []
+	for index in range(objects.size()):
+		var object: Dictionary = objects[index]
+		object.erase("_priority")
+		object.erase("_distance")
+		if index < AGENT_MAX_INDIVIDUAL_OBJECTS:
+			included.append(object)
+		else:
+			overflow.append(object)
+
+	return {
+		"total_count": objects.size(),
+		"listed_count": included.size(),
+		"listed": included,
+		"grouped_overflow": _agent_group_objects(overflow),
+		"overflow_note": "Repetitive lower-priority objects are grouped after %d individual objects to save tokens." % AGENT_MAX_INDIVIDUAL_OBJECTS if overflow.size() > 0 else "",
+	}
+
+func _agent_group_objects(objects: Array) -> Array:
+	var groups := {}
+	for object in objects:
+		var key := "%s:%s" % [str(object["kind"]), str(object["view_area"])]
+		if not groups.has(key):
+			groups[key] = {
+				"kind": str(object["kind"]),
+				"view_area": str(object["view_area"]),
+				"count": 0,
+				"sample_positions": [],
+			}
+		var group: Dictionary = groups[key]
+		group["count"] = int(group["count"]) + 1
+		var samples: Array = group["sample_positions"]
+		if samples.size() < 3:
+			samples.append(object["position"])
+
+	var grouped := []
+	for key in groups.keys():
+		grouped.append(groups[key])
+	grouped.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if str(a["kind"]) != str(b["kind"]):
+			return str(a["kind"]) < str(b["kind"])
+		return int(a["count"]) > int(b["count"])
+	)
+	return grouped
+
+func _agent_snapshot_summary(logged_in: bool, local_avatar: AvatarNode, view_rect: Rect2, players: Array, objects: Dictionary) -> String:
+	if not logged_in:
+		return "You are viewing Tiny Grove but are not logged in. The camera shows world x %.1f..%.1f and y %.1f..%.1f. Call POST /login, then ask for another snapshot." % [view_rect.position.x, view_rect.end.x, view_rect.position.y, view_rect.end.y]
+
+	var player_names := []
+	for player in players:
+		if not bool(player["is_you"]):
+			player_names.append(str(player["display_name"]))
+	var nearby_text := "No other visible players."
+	if player_names.size() > 0:
+		nearby_text = "Visible players: %s." % ", ".join(player_names)
+
+	var object_text := "No placed objects are visible."
+	if int(objects["total_count"]) > 0:
+		object_text = "%d placed object(s) are visible; %d are listed individually." % [int(objects["total_count"]), int(objects["listed_count"])]
+
+	return "You are %s at %s, facing %s. Camera view is x %.1f..%.1f, y %.1f..%.1f. %s %s" % [
+		str(local_avatar.get_meta("display_name", "Player")),
+		_agent_point_text(local_avatar.world_target),
+		_agent_facing_phrase(int(local_avatar.get_meta("last_dx", 0)), int(local_avatar.get_meta("last_dy", 0))),
+		view_rect.position.x,
+		view_rect.end.x,
+		view_rect.position.y,
+		view_rect.end.y,
+		nearby_text,
+		object_text,
+	]
+
+func _agent_screenshot(size_mode: String) -> Dictionary:
+	var mode := size_mode.to_lower()
+	var max_size := AGENT_DEFAULT_SCREENSHOT_MAX
+	var content_type := "image/jpeg"
+	if mode == "bigger":
+		max_size = AGENT_BIGGER_SCREENSHOT_MAX
+		content_type = "image/png"
+	elif mode == "max":
+		max_size = AGENT_MAX_SCREENSHOT_MAX
+		content_type = "image/png"
+
+	var viewport_texture := get_viewport().get_texture() if DisplayServer.get_name() != "headless" else null
+	var image: Image = null
+	if viewport_texture != null:
+		image = viewport_texture.get_image()
+	if image == null:
+		image = Image.create(max_size.x, max_size.y, false, Image.FORMAT_RGB8)
+		image.fill(Color(0.08, 0.10, 0.09))
+	var target_size := _agent_fit_size(Vector2i(image.get_width(), image.get_height()), max_size)
+	if target_size.x != image.get_width() or target_size.y != image.get_height():
+		image.resize(target_size.x, target_size.y, Image.INTERPOLATE_LANCZOS)
+
+	var bytes := PackedByteArray()
+	if content_type == "image/jpeg" and image.has_method("save_jpg_to_buffer"):
+		bytes = image.save_jpg_to_buffer(0.72)
+	if bytes.is_empty():
+		content_type = "image/png"
+		bytes = image.save_png_to_buffer()
+
+	return {
+		"content_type": content_type,
+		"bytes": bytes,
+	}
+
+func _agent_base_url() -> String:
+	if agent_http_port <= 0:
+		return ""
+	return "http://%s:%d" % [AGENT_HTTP_HOST, agent_http_port]
+
+func _agent_registry_dir() -> String:
+	return ProjectSettings.globalize_path("res://%s" % AGENT_REGISTRY_RELATIVE_DIR).simplify_path()
+
+func _update_agent_registry(delta: float) -> void:
+	if agent_http_port <= 0:
+		return
+	agent_registry_elapsed += delta
+	if agent_registry_elapsed < AGENT_REGISTRY_WRITE_SECONDS:
+		return
+	agent_registry_elapsed = 0.0
+	_write_agent_registry()
+
+func _write_agent_registry() -> void:
+	if agent_http_port <= 0:
+		return
+
+	var registry_dir := _agent_registry_dir()
+	DirAccess.make_dir_recursive_absolute(registry_dir)
+	agent_registry_path = registry_dir.path_join("%d.json" % agent_http_port)
+	var data := {
+		"game": "tinygrove",
+		"profile": agent_profile,
+		"pid": OS.get_process_id(),
+		"host": AGENT_HTTP_HOST,
+		"port": agent_http_port,
+		"base_url": _agent_base_url(),
+		"display_name": _agent_local_display_name(),
+		"identity": local_identity,
+		"logged_in": _agent_is_logged_in(),
+		"connected": client != null and bool(client.call("is_connected")),
+		"status": client.status() if client != null else "client not ready",
+		"updated_unix": Time.get_unix_time_from_system(),
+	}
+	var file := FileAccess.open(agent_registry_path, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify(data, "\t"))
+
+func _remove_agent_registry() -> void:
+	if not agent_registry_path.is_empty() and FileAccess.file_exists(agent_registry_path):
+		DirAccess.remove_absolute(agent_registry_path)
+
+func _agent_fit_size(current: Vector2i, maximum: Vector2i) -> Vector2i:
+	if current.x <= maximum.x and current.y <= maximum.y:
+		return current
+	var scale: float = min(float(maximum.x) / float(current.x), float(maximum.y) / float(current.y))
+	return Vector2i(max(1, int(floor(current.x * scale))), max(1, int(floor(current.y * scale))))
+
+func _agent_point(point: Vector2) -> Dictionary:
+	return {
+		"x": snappedf(point.x, 0.1),
+		"y": snappedf(point.y, 0.1),
+		"tile_x": int(floor(point.x / TILE_SIZE)),
+		"tile_y": int(floor(point.y / TILE_SIZE)),
+	}
+
+func _agent_rect(rect: Rect2) -> Dictionary:
+	return {
+		"x": snappedf(rect.position.x, 0.1),
+		"y": snappedf(rect.position.y, 0.1),
+		"width": snappedf(rect.size.x, 0.1),
+		"height": snappedf(rect.size.y, 0.1),
+		"max_x": snappedf(rect.end.x, 0.1),
+		"max_y": snappedf(rect.end.y, 0.1),
+	}
+
+func _agent_point_text(point: Vector2) -> String:
+	return "(%.1f, %.1f)" % [point.x, point.y]
+
+func _agent_facing_phrase(dx: int, dy: int) -> String:
+	if dx < 0:
+		return "west"
+	if dx > 0:
+		return "east"
+	if dy < 0:
+		return "north"
+	if dy > 0:
+		return "south"
+	return "south"
+
+func _agent_relative_phrase(origin: Vector2, target: Vector2) -> String:
+	var delta := target - origin
+	var tiles_x := snappedf(delta.x / TILE_SIZE, 0.1)
+	var tiles_y := snappedf(delta.y / TILE_SIZE, 0.1)
+	var horizontal := ""
+	var vertical := ""
+	if absf(tiles_x) >= 0.5:
+		horizontal = "%.1f tile(s) %s" % [absf(tiles_x), "east" if tiles_x > 0.0 else "west"]
+	if absf(tiles_y) >= 0.5:
+		vertical = "%.1f tile(s) %s" % [absf(tiles_y), "south" if tiles_y > 0.0 else "north"]
+	if horizontal.is_empty() and vertical.is_empty():
+		return "at your position"
+	if horizontal.is_empty():
+		return vertical
+	if vertical.is_empty():
+		return horizontal
+	return "%s, %s" % [vertical, horizontal]
+
+func _agent_area_phrase(point: Vector2, view_rect: Rect2) -> String:
+	var rx := clampf((point.x - view_rect.position.x) / maxf(view_rect.size.x, 1.0), 0.0, 1.0)
+	var ry := clampf((point.y - view_rect.position.y) / maxf(view_rect.size.y, 1.0), 0.0, 1.0)
+	var horizontal := "west" if rx < 0.33 else "east" if rx > 0.66 else "center"
+	var vertical := "north" if ry < 0.33 else "south" if ry > 0.66 else "middle"
+	if horizontal == "center" and vertical == "middle":
+		return "center"
+	if horizontal == "center":
+		return vertical
+	if vertical == "middle":
+		return horizontal
+	return "%s-%s" % [vertical, horizontal]
 
 func _load_smoke_config() -> void:
 	smoke_enabled = OS.get_environment("TINYGROVE_SMOKE") == "1"

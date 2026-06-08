@@ -96,3 +96,11 @@ The intended Watch integration should look like this:
 - stable agent identity and clear readiness/error state.
 
 This keeps the game playable by humans in Godot and by agents in Watch without splitting authority. Both should send reducer intents to SpacetimeDB.
+
+## Agent Player Surface
+
+Published skills for agents that play Tiny Grove live in `published-skills/`, separate from `.agents/skills` repo-authoring guidance.
+
+The first published skill is `published-skills/tinygrove-player/SKILL.md`. It documents the Godot client's loopback HTTP player interface, currently supporting login, camera-scoped text snapshots, and optional screenshots. Streaming and action endpoints are intentionally not part of this first surface yet.
+
+Each client writes a discovery file under `.tinygrove/agents/` with its profile, PID, port, login state, and base URL. Use `TINYGROVE_AGENT_PROFILE=agent` for agent-owned clients, `TINYGROVE_AGENT_NAME=Codex` to set the default login name, and `TINYGROVE_AGENT_PORT=37390` when a harness needs a pinned port. Without an explicit port, clients scan upward from `37373` to avoid local collisions. Agent and human profiles also use separate SpacetimeDB credential keys, so an agent client does not inherit the human player's local identity.

@@ -1,0 +1,59 @@
+---
+name: tinygrove-player
+description: Use when an agent needs to play, inspect, or visually understand Tiny Grove through a running Godot client, including logging in, reading camera-scoped state, or requesting screenshots from the loopback player interface.
+---
+
+# Tiny Grove Player
+
+Use the running Godot client as the agent's window into Tiny Grove. The interface is intentionally gentle: start with the smallest text snapshot, follow any instruction it gives you, and only request images when spatial text is not enough.
+
+## Loopback Interface
+
+Running clients publish a small discovery file in:
+
+```text
+.tinygrove/agents/*.json
+```
+
+Prefer a registry entry whose `profile` is `agent`. Use its `base_url` for requests. If there is no registry yet, try the default base URL:
+
+```text
+http://127.0.0.1:37373
+```
+
+The Godot client must be running. For multiplayer state, the Tiny Grove SpacetimeDB dev server must also be running and the client must be connected. A client launched with `TINYGROVE_AGENT_PROFILE=agent` identifies itself as an agent-controlled instance and uses agent-specific SpacetimeDB credentials so it does not inherit the human player's local identity. `TINYGROVE_AGENT_NAME` sets the default login name, and `TINYGROVE_AGENT_PORT` pins the loopback port when a harness needs a known address. Without an explicit port, clients scan upward from `37373` to avoid collisions.
+
+## First Move
+
+Ask for a snapshot:
+
+```sh
+curl "$TINYGROVE_BASE_URL/snapshot"
+```
+
+If the snapshot says you are not logged in, log in:
+
+```sh
+curl -X POST "$TINYGROVE_BASE_URL/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"display_name":"Agent"}'
+```
+
+Then wait a moment and request `/snapshot` again. Calling `/login` while already logged in is safe; it reports success as the current player instead of treating that as an error.
+
+## Endpoints
+
+- `GET /snapshot`: returns a JSON text snapshot constrained to the current camera view. It includes connection status, who you are, visible players, active chat bubbles, visible player plots, and visible objects. It groups repetitive lower-priority objects after the individual object list becomes large.
+- `POST /login`: joins the game through the Godot client. The JSON body may include `display_name`; if omitted, the default is `Agent`.
+- `GET /screenshot`: returns a compact JPEG downsampled to fit `1024x768`.
+- `GET /screenshot?size=bigger`: returns a PNG downsampled to fit `1280x720`.
+- `GET /screenshot?size=max`: returns a PNG downsampled to fit `1920x1080`.
+- `GET /help`: lists the current interface.
+
+There is no stream endpoint yet, and there are no movement or world-action endpoints yet.
+
+## Playing Style
+
+Prefer `/snapshot` before `/screenshot`. The snapshot is camera-scoped on purpose, so do not assume objects outside the described view are available. Use screenshots when tile shape, color, occlusion, or visual layout matters.
+
+When an endpoint returns a recovery instruction, follow it directly. The interface is designed for "probably just works" behavior rather than precise CLI-style error handling.

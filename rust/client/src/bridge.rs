@@ -9,7 +9,7 @@ use generated::{
     WorldObjectTableAccess, interact_near, join_game, move_player, place_object, send_chat,
 };
 use godot::prelude::*;
-use spacetimedb_sdk::{DbContext, Table};
+use spacetimedb_sdk::{DbContext, Table, credentials};
 
 const CLIENT_PROTOCOL_VERSION: u32 = 1;
 const DEFAULT_DB_URI: &str = "http://127.0.0.1:3000";
@@ -42,11 +42,26 @@ impl IRefCounted for TinyGroveClient {
 impl TinyGroveClient {
     #[func]
     pub fn connect_local(&mut self) -> bool {
-        self.connect_to(DEFAULT_DB_URI.into(), DEFAULT_DB_NAME.into())
+        self.connect_local_with_profile("human".into())
+    }
+
+    #[func]
+    pub fn connect_local_with_profile(&mut self, profile: GString) -> bool {
+        self.connect_to_with_profile(DEFAULT_DB_URI.into(), DEFAULT_DB_NAME.into(), profile)
     }
 
     #[func]
     pub fn connect_to(&mut self, uri: GString, database_name: GString) -> bool {
+        self.connect_to_with_profile(uri, database_name, "human".into())
+    }
+
+    #[func]
+    pub fn connect_to_with_profile(
+        &mut self,
+        uri: GString,
+        database_name: GString,
+        profile: GString,
+    ) -> bool {
         self.connection = None;
         self.connected = false;
         self.subscribed = false;
@@ -55,10 +70,27 @@ impl TinyGroveClient {
 
         let uri = uri.to_string();
         let database_name = database_name.to_string();
+        let credential_key = credential_key(&uri, &database_name, &profile.to_string());
+        let token = match credentials::File::new(&credential_key).load() {
+            Ok(token) => token,
+            Err(error) => {
+                self.last_error = format!("Could not load credentials for {credential_key}: {error}");
+                None
+            }
+        };
+        let save_credential_key = credential_key.clone();
         let build_result = DbConnection::builder()
             .with_uri(uri)
             .with_database_name(database_name)
-            .on_connect(|ctx, _identity, _token| {
+            .with_token(token)
+            .on_connect(move |ctx, _identity, token| {
+                if let Err(error) = credentials::File::new(&save_credential_key).save(token.to_string()) {
+                    godot_warn!(
+                        "Could not save SpacetimeDB credentials for {}: {}",
+                        save_credential_key,
+                        error
+                    );
+                }
                 ctx.subscription_builder().subscribe([
                     "SELECT * FROM server_config",
                     "SELECT * FROM player",
@@ -326,6 +358,24 @@ fn identity_key(identity: &spacetimedb_sdk::Identity) -> String {
     identity.to_hex().to_string()
 }
 
+fn credential_key(uri: &str, database_name: &str, profile: &str) -> String {
+    let profile = if profile.trim().is_empty() {
+        "human"
+    } else {
+        profile.trim()
+    };
+    let raw = format!("tinygrove-{profile}-{uri}-{database_name}");
+    raw.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn player_dictionary(
     player: Option<&Player>,
     position: &PlayerPosition,
@@ -344,6 +394,8 @@ fn player_dictionary(
     dict.set("online", online);
     dict.set("x", position.x);
     dict.set("y", position.y);
+    dict.set("last_dx", position.last_dx);
+    dict.set("last_dy", position.last_dy);
     dict
 }
 

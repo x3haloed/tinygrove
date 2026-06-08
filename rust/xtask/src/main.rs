@@ -368,6 +368,7 @@ fn spawn_smoke_client(
             ("TINYGROVE_SMOKE_DX", &dx),
             ("TINYGROVE_SMOKE_DY", &dy),
             ("TINYGROVE_SMOKE_OBJECT", object_kind),
+            ("TINYGROVE_AGENT_PROFILE", name),
         ],
     )
 }
