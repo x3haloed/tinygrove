@@ -13,6 +13,8 @@ The first goal is deliberately modest: a 2D Godot play canvas where friends can 
 
 The important project opinion is that Godot should not become the authority for multiplayer state. Godot collects input and renders subscribed state. SpacetimeDB reducers validate player intent and mutate authoritative tables.
 
+Another important project goal: LLM agents should eventually be able to play too. The target integration is Watch at `/Users/chad/Repos/watch`, whose agents receive recurring Soundings from subscribed streams, can inspect supported media when available, and act through tools. Tiny Grove should expose structured game-state deltas and semantic actions for Watch rather than requiring agents to scrape the Godot UI.
+
 ## Repository Layout
 
 ```text
@@ -83,3 +85,14 @@ The next milestone is a true vertical slice:
 After that, the project can grow toward world chunks, tile placement, and declarative player-authored interactions.
 
 Run `cargo xtask smoke two-clients` to exercise the current vertical slice with two headless Godot clients against a local SpacetimeDB server.
+
+## Future Watch Player
+
+The intended Watch integration should look like this:
+
+- a compact state stream with player, chat, movement, and nearby world changes;
+- optional visual snapshots that image-capable models can request through Watch media handling;
+- tools or bridge commands for the same verbs a human has: join, move, chat, inspect, and later place/activate world objects;
+- stable agent identity and clear readiness/error state.
+
+This keeps the game playable by humans in Godot and by agents in Watch without splitting authority. Both should send reducer intents to SpacetimeDB.

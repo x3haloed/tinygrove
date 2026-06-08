@@ -32,3 +32,10 @@ The first multiplayer slice is intentionally small:
 - Generated Rust bindings belong in `rust/client/generated`.
 - The Godot Rust extension is built and staged with `cargo xtask client build`.
 - The repeatable local replication smoke test is `cargo xtask smoke two-clients`.
+
+Future Watch integration:
+
+- Watch lives at `/Users/chad/Repos/watch`.
+- Watch agents perceive through subscribed Sounding streams and optional media attachments.
+- Tiny Grove should eventually expose a structured game-state stream plus semantic action tools/commands for join, move, chat, inspect, and later world editing.
+- Visual snapshots should be optional media references for image-capable models, not the only source of state.

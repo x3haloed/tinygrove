@@ -80,6 +80,22 @@ Seamless server and client upgrades are a real project goal, so preserve compati
 - Keep scene/UI updates separate from reducer calls. A scene may request movement or chat; it should not become the source of truth for position or chat history.
 - Use simple placeholder visuals until the multiplayer data flow is proven.
 
+### Watch / LLM Player Goal
+
+Tiny Grove should eventually be playable by agents running in the Watch repo at `/Users/chad/Repos/watch`. Treat this as a first-class architecture constraint, not a novelty integration.
+
+Watch is a Sounding-based harness: subscribed streams feed deltas into recurring model calls, media can be attached to the active Sounding when the selected model supports that modality, and tools are the model's action surface. Tiny Grove should integrate with that shape instead of requiring an agent to scrape pixels or pretend to be a keyboard-only human.
+
+Future Watch support should provide:
+
+- A compact game-state stream suitable for Watch `webApiStreams` or a Watch-native stream. It should emit meaningful state transitions such as joined players, moved players, chat messages, nearby interactables, and local-agent status.
+- Optional visual snapshots through a URL or file/media endpoint. The state stream should include a hint or media reference so image-capable models can inspect the current view through Watch's media path when needed, while text-only models still receive useful structured state.
+- A tool/action surface with the same semantic verbs as the human client: join, move, send chat, inspect state, and eventually place tiles or activate authored rules. Prefer reducer-intent verbs over raw key/mouse emulation.
+- Stable agent identity/session handling so a Watch player can reconnect and continue as itself.
+- Observability that is useful to both humans and agents: clear readiness state, reducer failures, subscription status, and protocol/version mismatch information.
+
+Do not design future gameplay features only for visual/manual use. If a human can do a meaningful action, there should be a path for a Watch agent to perceive the relevant state and request the same action through explicit game verbs.
+
 ### Dependency And Local State Notes
 
 - Local SpacetimeDB data lives in `.spacetime-data/` and is ignored.
