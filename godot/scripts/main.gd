@@ -28,6 +28,7 @@ const BUBBLE_MAX_CHARS := 28
 var client: RefCounted
 var avatars: Dictionary = {}
 var world_objects: Dictionary = {}
+var player_plots: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
 var chat_messages_seen: Dictionary = {}
 var chat_bubbles_by_sender: Dictionary = {}
@@ -48,6 +49,9 @@ func _ready() -> void:
 	var ground := GroundNode.new()
 	ground.z_index = -1000
 	world.add_child(ground)
+	var plots := PlotLayerNode.new()
+	plots.z_index = -900
+	world.add_child(plots)
 	_style_ui()
 	join_button.pressed.connect(_join_game)
 	send_button.pressed.connect(_send_chat)
@@ -68,6 +72,7 @@ func _process(delta: float) -> void:
 	_update_status()
 	_update_chat()
 	_update_world()
+	_update_plots()
 	_update_objects()
 	_update_camera(delta)
 	_handle_interaction()
@@ -152,6 +157,17 @@ func _update_objects() -> void:
 		if not seen.has(id):
 			world_objects[id].queue_free()
 			world_objects.erase(id)
+
+func _update_plots() -> void:
+	player_plots.clear()
+	for row in client.player_plots():
+		var owner := str(row["owner"])
+		player_plots[owner] = {
+			"display_name": str(row["display_name"]),
+			"origin": Vector2(float(row["origin_x"]), float(row["origin_y"])),
+			"size": Vector2(float(row["width"]), float(row["height"])),
+			"is_local": owner == local_identity,
+		}
 
 func _ingest_chat_messages() -> String:
 	var recent := ""
@@ -401,6 +417,29 @@ class WorldObjectNode:
 		draw_rect(Rect2(Vector2(-18, -20), Vector2(36, 18)), Color(0.62, 0.40, 0.20))
 		draw_rect(Rect2(Vector2(-15, -17), Vector2(30, 12)), Color(0.78, 0.55, 0.30))
 		draw_rect(Rect2(Vector2(-11, -13), Vector2(22, 2)), Color(0.36, 0.20, 0.10, 0.55))
+
+class PlotLayerNode:
+	extends Node2D
+
+	func _process(_delta: float) -> void:
+		queue_redraw()
+
+	func _draw() -> void:
+		var main := get_parent().get_parent()
+		if main == null:
+			return
+
+		for owner in main.player_plots.keys():
+			var plot: Dictionary = main.player_plots[owner]
+			var origin: Vector2 = plot["origin"]
+			var plot_size: Vector2 = plot["size"]
+			var is_local: bool = bool(plot["is_local"])
+			var rect := Rect2(origin, plot_size)
+			var fill := Color(0.74, 0.92, 0.55, 0.10) if is_local else Color(0.80, 0.86, 0.66, 0.06)
+			var border := Color(1.0, 0.95, 0.55, 0.95) if is_local else Color(0.65, 0.78, 0.55, 0.70)
+			draw_rect(rect, fill)
+			draw_rect(rect, border, false, 2.0)
+			draw_string(ThemeDB.fallback_font, origin + Vector2(6, 14), str(plot["display_name"]), HORIZONTAL_ALIGNMENT_LEFT, plot_size.x - 12, 11, border)
 
 class GroundNode:
 	extends Node2D

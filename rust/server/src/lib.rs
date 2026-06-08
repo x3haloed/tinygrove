@@ -1,10 +1,11 @@
 use spacetimedb::{Identity, ReducerContext, Table, Timestamp, reducer, table};
 
 const SUPPORTED_CLIENT_PROTOCOL: u32 = 1;
-const DEFAULT_SPAWN_X: i32 = 0;
-const DEFAULT_SPAWN_Y: i32 = 0;
 const MOVE_STEP: i32 = 16;
 const INTERACTION_REACH: i32 = MOVE_STEP;
+const PLOT_SIZE: i32 = MOVE_STEP * 8;
+const PLOT_GAP: i32 = MOVE_STEP * 4;
+const PLOT_COLUMNS: i32 = 4;
 const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
 const MAX_OBJECT_KIND_CHARS: usize = 24;
@@ -38,6 +39,17 @@ pub struct PlayerPosition {
     pub last_dx: i32,
     pub last_dy: i32,
     pub updated_at: Timestamp,
+}
+
+#[table(accessor = player_plot, public)]
+pub struct PlayerPlot {
+    #[primary_key]
+    pub owner: Identity,
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub assigned_at: Timestamp,
 }
 
 #[table(accessor = chat_message, public)]
@@ -132,6 +144,8 @@ pub fn join_game(
         });
     }
 
+    let plot = ensure_player_plot(ctx);
+
     if ctx
         .db
         .player_position()
@@ -141,8 +155,8 @@ pub fn join_game(
     {
         ctx.db.player_position().insert(PlayerPosition {
             identity: ctx.sender(),
-            x: DEFAULT_SPAWN_X,
-            y: DEFAULT_SPAWN_Y,
+            x: plot.origin_x + plot.width / 2,
+            y: plot.origin_y + plot.height / 2,
             last_dx: 0,
             last_dy: 0,
             updated_at: ctx.timestamp,
@@ -199,6 +213,11 @@ pub fn place_object(ctx: &ReducerContext, kind: String) -> Result<(), String> {
     let kind = clean_object_kind(kind)?;
     let position = require_position(ctx)?;
     let target = interaction_target(&position);
+    let plot = require_plot(ctx)?;
+
+    if !plot_contains(&plot, target.0, target.1) {
+        return Err("You can only place objects inside your plot".to_string());
+    }
 
     if ctx
         .db
@@ -285,6 +304,52 @@ fn require_position(ctx: &ReducerContext) -> Result<PlayerPosition, String> {
         .identity()
         .find(ctx.sender())
         .ok_or_else(|| "Player position not found".to_string())
+}
+
+fn require_plot(ctx: &ReducerContext) -> Result<PlayerPlot, String> {
+    ctx.db
+        .player_plot()
+        .owner()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player plot not found".to_string())
+}
+
+fn ensure_player_plot(ctx: &ReducerContext) -> PlayerPlot {
+    if let Some(plot) = ctx.db.player_plot().owner().find(ctx.sender()) {
+        return plot;
+    }
+
+    let index = ctx.db.player_plot().iter().count() as i32;
+    let stride = PLOT_SIZE + PLOT_GAP;
+    let column = index % PLOT_COLUMNS;
+    let row = index / PLOT_COLUMNS;
+    let origin_x = column * stride - stride;
+    let origin_y = row * stride - stride;
+    let owner = ctx.sender();
+    ctx.db.player_plot().insert(PlayerPlot {
+        owner,
+        origin_x,
+        origin_y,
+        width: PLOT_SIZE,
+        height: PLOT_SIZE,
+        assigned_at: ctx.timestamp,
+    });
+
+    PlayerPlot {
+        owner,
+        origin_x,
+        origin_y,
+        width: PLOT_SIZE,
+        height: PLOT_SIZE,
+        assigned_at: ctx.timestamp,
+    }
+}
+
+fn plot_contains(plot: &PlayerPlot, x: i32, y: i32) -> bool {
+    x >= plot.origin_x
+        && x < plot.origin_x + plot.width
+        && y >= plot.origin_y
+        && y < plot.origin_y + plot.height
 }
 
 fn interaction_target(position: &PlayerPosition) -> (i32, i32) {

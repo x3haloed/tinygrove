@@ -12,6 +12,8 @@ pub mod interact_near_reducer;
 pub mod join_game_reducer;
 pub mod move_player_reducer;
 pub mod place_object_reducer;
+pub mod player_plot_table;
+pub mod player_plot_type;
 pub mod player_position_table;
 pub mod player_position_type;
 pub mod player_table;
@@ -28,6 +30,8 @@ pub use interact_near_reducer::interact_near;
 pub use join_game_reducer::join_game;
 pub use move_player_reducer::move_player;
 pub use place_object_reducer::place_object;
+pub use player_plot_table::*;
+pub use player_plot_type::PlayerPlot;
 pub use player_position_table::*;
 pub use player_position_type::PlayerPosition;
 pub use player_table::*;
@@ -117,6 +121,7 @@ impl __sdk::Reducer for Reducer {
 pub struct DbUpdate {
     chat_message: __sdk::TableUpdate<ChatMessage>,
     player: __sdk::TableUpdate<Player>,
+    player_plot: __sdk::TableUpdate<PlayerPlot>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
     server_config: __sdk::TableUpdate<ServerConfig>,
     world_object: __sdk::TableUpdate<WorldObject>,
@@ -134,6 +139,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "player" => db_update
                     .player
                     .append(player_table::parse_table_update(table_update)?),
+                "player_plot" => db_update
+                    .player_plot
+                    .append(player_plot_table::parse_table_update(table_update)?),
                 "player_position" => db_update
                     .player_position
                     .append(player_position_table::parse_table_update(table_update)?),
@@ -175,6 +183,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.player = cache
             .apply_diff_to_table::<Player>("player", &self.player)
             .with_updates_by_pk(|row| &row.identity);
+        diff.player_plot = cache
+            .apply_diff_to_table::<PlayerPlot>("player_plot", &self.player_plot)
+            .with_updates_by_pk(|row| &row.owner);
         diff.player_position = cache
             .apply_diff_to_table::<PlayerPosition>("player_position", &self.player_position)
             .with_updates_by_pk(|row| &row.identity);
@@ -196,6 +207,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player" => db_update
                     .player
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "player_plot" => db_update
+                    .player_plot
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player_position" => db_update
                     .player_position
@@ -225,6 +239,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "player" => db_update
                     .player
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "player_plot" => db_update
+                    .player_plot
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "player_position" => db_update
                     .player_position
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -251,6 +268,7 @@ impl __sdk::DbUpdate for DbUpdate {
 pub struct AppliedDiff<'r> {
     chat_message: __sdk::TableAppliedDiff<'r, ChatMessage>,
     player: __sdk::TableAppliedDiff<'r, Player>,
+    player_plot: __sdk::TableAppliedDiff<'r, PlayerPlot>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
     server_config: __sdk::TableAppliedDiff<'r, ServerConfig>,
     world_object: __sdk::TableAppliedDiff<'r, WorldObject>,
@@ -273,6 +291,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Player>("player", &self.player, event);
+        callbacks.invoke_table_row_callbacks::<PlayerPlot>("player_plot", &self.player_plot, event);
         callbacks.invoke_table_row_callbacks::<PlayerPosition>(
             "player_position",
             &self.player_position,
@@ -950,6 +969,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         chat_message_table::register_table(client_cache);
         player_table::register_table(client_cache);
+        player_plot_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
         server_config_table::register_table(client_cache);
         world_object_table::register_table(client_cache);
@@ -957,6 +977,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "chat_message",
         "player",
+        "player_plot",
         "player_position",
         "server_config",
         "world_object",

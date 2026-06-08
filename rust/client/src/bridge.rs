@@ -4,9 +4,9 @@ mod generated;
 use std::collections::HashMap;
 
 use generated::{
-    ChatMessage, ChatMessageTableAccess, DbConnection, Player, PlayerPosition,
-    PlayerPositionTableAccess, PlayerTableAccess, WorldObject, WorldObjectTableAccess,
-    interact_near, join_game, move_player, place_object, send_chat,
+    ChatMessage, ChatMessageTableAccess, DbConnection, Player, PlayerPlot, PlayerPlotTableAccess,
+    PlayerPosition, PlayerPositionTableAccess, PlayerTableAccess, WorldObject,
+    WorldObjectTableAccess, interact_near, join_game, move_player, place_object, send_chat,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table};
@@ -62,6 +62,7 @@ impl TinyGroveClient {
                 ctx.subscription_builder().subscribe([
                     "SELECT * FROM server_config",
                     "SELECT * FROM player",
+                    "SELECT * FROM player_plot",
                     "SELECT * FROM player_position",
                     "SELECT * FROM chat_message",
                     "SELECT * FROM world_object",
@@ -288,6 +289,33 @@ impl TinyGroveClient {
 
         rows
     }
+
+    #[func]
+    pub fn player_plots(&self) -> Array<Dictionary<Variant, Variant>> {
+        let mut rows = Array::new();
+        let Some(connection) = self.connection.as_ref() else {
+            return rows;
+        };
+
+        let players = connection
+            .db
+            .player()
+            .iter()
+            .map(|player| (identity_key(&player.identity), player))
+            .collect::<HashMap<_, _>>();
+
+        let mut plots = connection.db.player_plot().iter().collect::<Vec<_>>();
+        plots.sort_by_key(|plot| (plot.origin_y, plot.origin_x));
+
+        for plot in plots {
+            rows.push(&player_plot_dictionary(
+                &plot,
+                players.get(&identity_key(&plot.owner)),
+            ));
+        }
+
+        rows
+    }
 }
 
 fn clamp_axis(value: i64) -> i32 {
@@ -341,6 +369,25 @@ fn world_object_dictionary(object: &WorldObject) -> Dictionary<Variant, Variant>
     dict.set("y", object.y);
     dict.set("state", object.state);
     dict.set("created_by", identity_key(&object.created_by));
+    dict
+}
+
+fn player_plot_dictionary(
+    plot: &PlayerPlot,
+    player: Option<&Player>,
+) -> Dictionary<Variant, Variant> {
+    let mut dict = Dictionary::new();
+    let owner = identity_key(&plot.owner);
+    let display_name = player
+        .map(|player| player.display_name.clone())
+        .unwrap_or_else(|| short_identity(&owner));
+
+    dict.set("owner", owner);
+    dict.set("display_name", display_name);
+    dict.set("origin_x", plot.origin_x);
+    dict.set("origin_y", plot.origin_y);
+    dict.set("width", plot.width);
+    dict.set("height", plot.height);
     dict
 }
 
