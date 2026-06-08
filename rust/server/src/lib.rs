@@ -4,8 +4,10 @@ const SUPPORTED_CLIENT_PROTOCOL: u32 = 1;
 const DEFAULT_SPAWN_X: i32 = 0;
 const DEFAULT_SPAWN_Y: i32 = 0;
 const MOVE_STEP: i32 = 16;
+const INTERACTION_REACH: i32 = MOVE_STEP;
 const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
+const MAX_OBJECT_KIND_CHARS: usize = 24;
 
 #[table(accessor = server_config, public)]
 pub struct ServerConfig {
@@ -48,6 +50,20 @@ pub struct ChatMessage {
     pub sent_at: Timestamp,
 }
 
+#[table(accessor = world_object, public)]
+pub struct WorldObject {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub kind: String,
+    pub x: i32,
+    pub y: i32,
+    pub state: i32,
+    pub created_by: Identity,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
     upsert_server_config(
@@ -55,6 +71,7 @@ pub fn init(ctx: &ReducerContext) {
         "supported_client_protocol",
         SUPPORTED_CLIENT_PROTOCOL.to_string(),
     );
+    seed_world_objects(ctx);
 }
 
 #[reducer(client_connected)]
@@ -175,12 +192,108 @@ pub fn send_chat(ctx: &ReducerContext, body: String) -> Result<(), String> {
     Ok(())
 }
 
+#[reducer]
+pub fn place_object(ctx: &ReducerContext, kind: String) -> Result<(), String> {
+    require_joined(ctx)?;
+
+    let kind = clean_object_kind(kind)?;
+    let position = require_position(ctx)?;
+    let target = interaction_target(&position);
+
+    if ctx
+        .db
+        .world_object()
+        .iter()
+        .any(|object| object.x == target.0 && object.y == target.1)
+    {
+        return Err("There is already something there".to_string());
+    }
+
+    ctx.db.world_object().insert(WorldObject {
+        id: 0,
+        kind,
+        x: target.0,
+        y: target.1,
+        state: 0,
+        created_by: ctx.sender(),
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+    });
+
+    Ok(())
+}
+
+#[reducer]
+pub fn interact_near(ctx: &ReducerContext) -> Result<(), String> {
+    let player = require_joined(ctx)?;
+    let position = require_position(ctx)?;
+    let target = interaction_target(&position);
+    let object = ctx
+        .db
+        .world_object()
+        .iter()
+        .filter(|object| {
+            (object.x - target.0).abs() <= INTERACTION_REACH
+                && (object.y - target.1).abs() <= INTERACTION_REACH
+        })
+        .min_by_key(|object| (object.x - target.0).abs() + (object.y - target.1).abs())
+        .ok_or_else(|| "There is nothing nearby to interact with".to_string())?;
+
+    match object.kind.as_str() {
+        "button" => {
+            ctx.db.world_object().id().update(WorldObject {
+                state: if object.state == 0 { 1 } else { 0 },
+                updated_at: ctx.timestamp,
+                ..object
+            });
+        }
+        "sign" => {
+            ctx.db.chat_message().insert(ChatMessage {
+                id: 0,
+                sender: ctx.sender(),
+                body: format!(
+                    "{} reads the sign: Welcome to Tiny Grove.",
+                    player.display_name
+                ),
+                sent_at: ctx.timestamp,
+            });
+        }
+        _ => {
+            ctx.db.chat_message().insert(ChatMessage {
+                id: 0,
+                sender: ctx.sender(),
+                body: format!("{} inspects the {}.", player.display_name, object.kind),
+                sent_at: ctx.timestamp,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn require_joined(ctx: &ReducerContext) -> Result<Player, String> {
     ctx.db
         .player()
         .identity()
         .find(ctx.sender())
         .ok_or_else(|| "Join the game before sending actions".to_string())
+}
+
+fn require_position(ctx: &ReducerContext) -> Result<PlayerPosition, String> {
+    ctx.db
+        .player_position()
+        .identity()
+        .find(ctx.sender())
+        .ok_or_else(|| "Player position not found".to_string())
+}
+
+fn interaction_target(position: &PlayerPosition) -> (i32, i32) {
+    let (dx, dy) = if position.last_dx == 0 && position.last_dy == 0 {
+        (0, 1)
+    } else {
+        (position.last_dx, position.last_dy)
+    };
+    (position.x + dx * MOVE_STEP, position.y + dy * MOVE_STEP)
 }
 
 fn upsert_server_config(ctx: &ReducerContext, key: &str, value: String) {
@@ -195,6 +308,30 @@ fn upsert_server_config(ctx: &ReducerContext, key: &str, value: String) {
         ctx.db.server_config().insert(ServerConfig {
             key,
             value,
+            updated_at: ctx.timestamp,
+        });
+    }
+}
+
+fn seed_world_objects(ctx: &ReducerContext) {
+    if ctx.db.world_object().iter().next().is_some() {
+        return;
+    }
+
+    for (kind, x, y, state) in [
+        ("sign", 0, -32, 0),
+        ("button", 48, 0, 0),
+        ("flower", -48, 32, 0),
+        ("rock", 96, -32, 0),
+    ] {
+        ctx.db.world_object().insert(WorldObject {
+            id: 0,
+            kind: kind.to_string(),
+            x,
+            y,
+            state,
+            created_by: ctx.sender(),
+            created_at: ctx.timestamp,
             updated_at: ctx.timestamp,
         });
     }
@@ -224,4 +361,20 @@ fn clean_chat_body(body: String) -> Result<String, String> {
         ));
     }
     Ok(body.to_string())
+}
+
+fn clean_object_kind(kind: String) -> Result<String, String> {
+    let kind = kind.trim().to_lowercase();
+    if kind.is_empty() {
+        return Err("Object kind cannot be empty".to_string());
+    }
+    if kind.chars().count() > MAX_OBJECT_KIND_CHARS {
+        return Err(format!(
+            "Object kind must be {MAX_OBJECT_KIND_CHARS} characters or fewer"
+        ));
+    }
+    match kind.as_str() {
+        "button" | "flower" | "rock" | "sign" => Ok(kind),
+        _ => Err("Object kind must be button, flower, rock, or sign".to_string()),
+    }
 }

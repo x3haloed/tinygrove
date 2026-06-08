@@ -10,6 +10,8 @@ const CAMERA_DEADZONE := Vector2(220.0, 120.0)
 const SMOKE_JOIN_FRAME := 6
 const SMOKE_MOVE_FRAME := 18
 const SMOKE_CHAT_FRAME := 30
+const SMOKE_PLACE_FRAME := 42
+const SMOKE_INTERACT_FRAME := 54
 const STATUS_MAX_CHARS := 92
 const BUBBLE_VISIBLE_SECONDS := 3.5
 const BUBBLE_FADE_SECONDS := 1.1
@@ -25,6 +27,7 @@ const BUBBLE_MAX_CHARS := 28
 
 var client: RefCounted
 var avatars: Dictionary = {}
+var world_objects: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
 var chat_messages_seen: Dictionary = {}
 var chat_bubbles_by_sender: Dictionary = {}
@@ -38,6 +41,7 @@ var smoke_name := ""
 var smoke_message := ""
 var smoke_dx := 0
 var smoke_dy := 0
+var smoke_object_kind := ""
 
 func _ready() -> void:
 	world.y_sort_enabled = true
@@ -64,7 +68,9 @@ func _process(delta: float) -> void:
 	_update_status()
 	_update_chat()
 	_update_world()
+	_update_objects()
 	_update_camera(delta)
+	_handle_interaction()
 	_handle_movement(delta)
 
 func _join_game() -> void:
@@ -92,6 +98,14 @@ func _handle_movement(delta: float) -> void:
 
 	move_elapsed = 0.0
 	client.move_player(ix, iy)
+
+func _handle_interaction() -> void:
+	if Input.is_action_just_pressed("interact"):
+		client.interact_near()
+	elif Input.is_action_just_pressed("place_flower"):
+		client.place_object("flower")
+	elif Input.is_action_just_pressed("place_button"):
+		client.place_object("button")
 
 func _update_status() -> void:
 	var text: String = client.status()
@@ -121,6 +135,23 @@ func _update_world() -> void:
 		if not seen.has(identity):
 			avatars[identity].queue_free()
 			avatars.erase(identity)
+
+func _update_objects() -> void:
+	var seen := {}
+	for row in client.world_objects():
+		var id := int(row["id"])
+		seen[id] = true
+		var object := _object_for(id)
+		object.position = Vector2(float(row["x"]), float(row["y"]))
+		object.set_meta("kind", str(row["kind"]))
+		object.set_meta("state", int(row["state"]))
+		object.z_index = int(object.position.y) - 1
+		object.queue_redraw()
+
+	for id in world_objects.keys():
+		if not seen.has(id):
+			world_objects[id].queue_free()
+			world_objects.erase(id)
 
 func _ingest_chat_messages() -> String:
 	var recent := ""
@@ -203,6 +234,15 @@ func _avatar_for(identity: String) -> Node2D:
 	avatars[identity] = avatar
 	return avatar
 
+func _object_for(id: int) -> Node2D:
+	if world_objects.has(id):
+		return world_objects[id]
+
+	var object := WorldObjectNode.new()
+	world.add_child(object)
+	world_objects[id] = object
+	return object
+
 func _style_ui() -> void:
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.10, 0.12, 0.13, 0.86)
@@ -233,6 +273,9 @@ func _load_smoke_config() -> void:
 		smoke_message = "smoke message"
 	smoke_dx = int(OS.get_environment("TINYGROVE_SMOKE_DX"))
 	smoke_dy = int(OS.get_environment("TINYGROVE_SMOKE_DY"))
+	smoke_object_kind = OS.get_environment("TINYGROVE_SMOKE_OBJECT")
+	if smoke_object_kind.is_empty():
+		smoke_object_kind = "flower"
 	name_edit.text = smoke_name
 	chat_edit.text = smoke_message
 
@@ -246,6 +289,10 @@ func _run_smoke_actions() -> void:
 		client.move_player(smoke_dx, smoke_dy)
 	elif frame == SMOKE_CHAT_FRAME:
 		client.send_chat(smoke_message)
+	elif frame == SMOKE_PLACE_FRAME:
+		client.place_object(smoke_object_kind)
+	elif frame == SMOKE_INTERACT_FRAME:
+		client.interact_near()
 
 class AvatarNode:
 	extends Node2D
@@ -312,6 +359,48 @@ class AvatarNode:
 				draw_rect(Rect2(rect.position, Vector2(2, rect.size.y)), trim)
 				draw_rect(Rect2(rect.position + Vector2(rect.size.x - 2, 0), Vector2(2, rect.size.y)), trim)
 				draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 13), preview, HORIZONTAL_ALIGNMENT_LEFT, width - 12, 11, text)
+
+class WorldObjectNode:
+	extends Node2D
+
+	func _draw() -> void:
+		var kind: String = str(get_meta("kind", "flower"))
+		var state: int = int(get_meta("state", 0))
+		match kind:
+			"button":
+				_draw_button(state)
+			"rock":
+				_draw_rock()
+			"sign":
+				_draw_sign()
+			_:
+				_draw_flower()
+
+	func _draw_button(state: int) -> void:
+		var top: Color = Color(0.92, 0.28, 0.20) if state == 0 else Color(0.26, 0.70, 0.35)
+		draw_rect(Rect2(Vector2(-10, 6), Vector2(20, 4)), Color(0.16, 0.12, 0.10, 0.35))
+		draw_rect(Rect2(Vector2(-8, -4), Vector2(16, 10)), Color(0.38, 0.28, 0.20))
+		draw_rect(Rect2(Vector2(-6, -8), Vector2(12, 8)), top)
+		draw_rect(Rect2(Vector2(-6, -8), Vector2(12, 2)), Color(1.0, 0.88, 0.70, 0.45))
+
+	func _draw_flower() -> void:
+		draw_rect(Rect2(Vector2(-2, -2), Vector2(4, 12)), Color(0.16, 0.45, 0.18))
+		draw_rect(Rect2(Vector2(-8, -10), Vector2(6, 6)), Color(0.98, 0.82, 0.26))
+		draw_rect(Rect2(Vector2(2, -10), Vector2(6, 6)), Color(0.98, 0.54, 0.66))
+		draw_rect(Rect2(Vector2(-3, -15), Vector2(6, 6)), Color(0.98, 0.72, 0.28))
+		draw_rect(Rect2(Vector2(-3, -8), Vector2(6, 6)), Color(0.40, 0.22, 0.10))
+
+	func _draw_rock() -> void:
+		draw_rect(Rect2(Vector2(-10, 5), Vector2(20, 4)), Color(0.12, 0.13, 0.12, 0.30))
+		draw_rect(Rect2(Vector2(-9, -8), Vector2(18, 14)), Color(0.42, 0.45, 0.43))
+		draw_rect(Rect2(Vector2(-5, -12), Vector2(11, 6)), Color(0.55, 0.59, 0.56))
+		draw_rect(Rect2(Vector2(-7, -6), Vector2(4, 3)), Color(0.70, 0.73, 0.70, 0.50))
+
+	func _draw_sign() -> void:
+		draw_rect(Rect2(Vector2(-3, -2), Vector2(6, 16)), Color(0.36, 0.20, 0.10))
+		draw_rect(Rect2(Vector2(-18, -20), Vector2(36, 18)), Color(0.62, 0.40, 0.20))
+		draw_rect(Rect2(Vector2(-15, -17), Vector2(30, 12)), Color(0.78, 0.55, 0.30))
+		draw_rect(Rect2(Vector2(-11, -13), Vector2(22, 2)), Color(0.36, 0.20, 0.10, 0.55))
 
 class GroundNode:
 	extends Node2D

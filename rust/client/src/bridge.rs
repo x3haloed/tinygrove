@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use generated::{
     ChatMessage, ChatMessageTableAccess, DbConnection, Player, PlayerPosition,
-    PlayerPositionTableAccess, PlayerTableAccess, join_game, move_player, send_chat,
+    PlayerPositionTableAccess, PlayerTableAccess, WorldObject, WorldObjectTableAccess,
+    interact_near, join_game, move_player, place_object, send_chat,
 };
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table};
@@ -63,6 +64,7 @@ impl TinyGroveClient {
                     "SELECT * FROM player",
                     "SELECT * FROM player_position",
                     "SELECT * FROM chat_message",
+                    "SELECT * FROM world_object",
                 ]);
             })
             .build();
@@ -161,6 +163,38 @@ impl TinyGroveClient {
     }
 
     #[func]
+    pub fn place_object(&mut self, kind: GString) -> bool {
+        let Some(connection) = self.connection.as_ref() else {
+            self.last_error = "Not connected".to_string();
+            return false;
+        };
+
+        match connection.reducers.place_object(kind.to_string()) {
+            Ok(()) => true,
+            Err(error) => {
+                self.last_error = error.to_string();
+                false
+            }
+        }
+    }
+
+    #[func]
+    pub fn interact_near(&mut self) -> bool {
+        let Some(connection) = self.connection.as_ref() else {
+            self.last_error = "Not connected".to_string();
+            return false;
+        };
+
+        match connection.reducers.interact_near() {
+            Ok(()) => true,
+            Err(error) => {
+                self.last_error = error.to_string();
+                false
+            }
+        }
+    }
+
+    #[func]
     pub fn status(&self) -> GString {
         GString::from(&self.status)
     }
@@ -237,6 +271,23 @@ impl TinyGroveClient {
 
         rows
     }
+
+    #[func]
+    pub fn world_objects(&self) -> Array<Dictionary<Variant, Variant>> {
+        let mut rows = Array::new();
+        let Some(connection) = self.connection.as_ref() else {
+            return rows;
+        };
+
+        let mut objects = connection.db.world_object().iter().collect::<Vec<_>>();
+        objects.sort_by_key(|object| object.id);
+
+        for object in objects {
+            rows.push(&world_object_dictionary(&object));
+        }
+
+        rows
+    }
 }
 
 fn clamp_axis(value: i64) -> i32 {
@@ -279,6 +330,17 @@ fn chat_dictionary(message: &ChatMessage, player: Option<&Player>) -> Dictionary
     dict.set("sender", sender);
     dict.set("display_name", display_name);
     dict.set("body", message.body.clone());
+    dict
+}
+
+fn world_object_dictionary(object: &WorldObject) -> Dictionary<Variant, Variant> {
+    let mut dict = Dictionary::new();
+    dict.set("id", object.id as i64);
+    dict.set("kind", object.kind.clone());
+    dict.set("x", object.x);
+    dict.set("y", object.y);
+    dict.set("state", object.state);
+    dict.set("created_by", identity_key(&object.created_by));
     dict
 }
 

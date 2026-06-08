@@ -226,8 +226,8 @@ fn smoke_two_clients() -> Result<(), String> {
         thread::sleep(Duration::from_millis(1200));
         db_publish()?;
 
-        let mut grove = spawn_smoke_client("Grove", "hello from Grove", 1, 0)?;
-        let mut moss = spawn_smoke_client("Moss", "hello from Moss", 0, 1)?;
+        let mut grove = spawn_smoke_client("Grove", "hello from Grove", 1, 0, "flower")?;
+        let mut moss = spawn_smoke_client("Moss", "hello from Moss", 0, 1, "button")?;
         wait_child("Godot smoke client Grove", &mut grove)?;
         wait_child("Godot smoke client Moss", &mut moss)?;
 
@@ -241,8 +241,13 @@ fn smoke_two_clients() -> Result<(), String> {
         let chat = sql("SELECT * FROM chat_message")?;
         require_contains(&chat, "hello from Grove", "chat query")?;
         require_contains(&chat, "hello from Moss", "chat query")?;
+        require_contains(&chat, "inspects", "chat query")?;
 
-        println!("smoke two-clients: replicated players, positions, and chat");
+        let objects = sql("SELECT * FROM world_object")?;
+        require_contains(&objects, "flower", "world object query")?;
+        require_contains(&objects, "button", "world object query")?;
+
+        println!("smoke two-clients: replicated players, positions, chat, and world objects");
         Ok(())
     })();
 
@@ -340,7 +345,13 @@ fn stop_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn spawn_smoke_client(name: &str, message: &str, dx: i32, dy: i32) -> Result<Child, String> {
+fn spawn_smoke_client(
+    name: &str,
+    message: &str,
+    dx: i32,
+    dy: i32,
+    object_kind: &str,
+) -> Result<Child, String> {
     let dx = dx.to_string();
     let dy = dy.to_string();
     spawn(
@@ -353,6 +364,7 @@ fn spawn_smoke_client(name: &str, message: &str, dx: i32, dy: i32) -> Result<Chi
             ("TINYGROVE_SMOKE_MESSAGE", message),
             ("TINYGROVE_SMOKE_DX", &dx),
             ("TINYGROVE_SMOKE_DY", &dy),
+            ("TINYGROVE_SMOKE_OBJECT", object_kind),
         ],
     )
 }

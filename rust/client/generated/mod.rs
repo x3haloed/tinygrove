@@ -8,8 +8,10 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 pub mod chat_message_table;
 pub mod chat_message_type;
+pub mod interact_near_reducer;
 pub mod join_game_reducer;
 pub mod move_player_reducer;
+pub mod place_object_reducer;
 pub mod player_position_table;
 pub mod player_position_type;
 pub mod player_table;
@@ -17,11 +19,15 @@ pub mod player_type;
 pub mod send_chat_reducer;
 pub mod server_config_table;
 pub mod server_config_type;
+pub mod world_object_table;
+pub mod world_object_type;
 
 pub use chat_message_table::*;
 pub use chat_message_type::ChatMessage;
+pub use interact_near_reducer::interact_near;
 pub use join_game_reducer::join_game;
 pub use move_player_reducer::move_player;
+pub use place_object_reducer::place_object;
 pub use player_position_table::*;
 pub use player_position_type::PlayerPosition;
 pub use player_table::*;
@@ -29,6 +35,8 @@ pub use player_type::Player;
 pub use send_chat_reducer::send_chat;
 pub use server_config_table::*;
 pub use server_config_type::ServerConfig;
+pub use world_object_table::*;
+pub use world_object_type::WorldObject;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -38,6 +46,7 @@ pub use server_config_type::ServerConfig;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
+    InteractNear,
     JoinGame {
         display_name: String,
         avatar_color: u32,
@@ -46,6 +55,9 @@ pub enum Reducer {
     MovePlayer {
         dx: i32,
         dy: i32,
+    },
+    PlaceObject {
+        kind: String,
     },
     SendChat {
         body: String,
@@ -59,8 +71,10 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
+            Reducer::InteractNear => "interact_near",
             Reducer::JoinGame { .. } => "join_game",
             Reducer::MovePlayer { .. } => "move_player",
+            Reducer::PlaceObject { .. } => "place_object",
             Reducer::SendChat { .. } => "send_chat",
             _ => unreachable!(),
         }
@@ -68,6 +82,9 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
+            Reducer::InteractNear => {
+                __sats::bsatn::to_vec(&interact_near_reducer::InteractNearArgs {})
+            }
             Reducer::JoinGame {
                 display_name,
                 avatar_color,
@@ -82,6 +99,9 @@ impl __sdk::Reducer for Reducer {
                     dx: dx.clone(),
                     dy: dy.clone(),
                 })
+            }
+            Reducer::PlaceObject { kind } => {
+                __sats::bsatn::to_vec(&place_object_reducer::PlaceObjectArgs { kind: kind.clone() })
             }
             Reducer::SendChat { body } => {
                 __sats::bsatn::to_vec(&send_chat_reducer::SendChatArgs { body: body.clone() })
@@ -99,6 +119,7 @@ pub struct DbUpdate {
     player: __sdk::TableUpdate<Player>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
     server_config: __sdk::TableUpdate<ServerConfig>,
+    world_object: __sdk::TableUpdate<WorldObject>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -119,6 +140,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "server_config" => db_update
                     .server_config
                     .append(server_config_table::parse_table_update(table_update)?),
+                "world_object" => db_update
+                    .world_object
+                    .append(world_object_table::parse_table_update(table_update)?),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -157,6 +181,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.server_config = cache
             .apply_diff_to_table::<ServerConfig>("server_config", &self.server_config)
             .with_updates_by_pk(|row| &row.key);
+        diff.world_object = cache
+            .apply_diff_to_table::<WorldObject>("world_object", &self.world_object)
+            .with_updates_by_pk(|row| &row.id);
 
         diff
     }
@@ -175,6 +202,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "server_config" => db_update
                     .server_config
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "world_object" => db_update
+                    .world_object
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -201,6 +231,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "server_config" => db_update
                     .server_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "world_object" => db_update
+                    .world_object
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
                         __sdk::InternalError::unknown_name("table", unknown, "QueryRows").into(),
@@ -220,6 +253,7 @@ pub struct AppliedDiff<'r> {
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
     server_config: __sdk::TableAppliedDiff<'r, ServerConfig>,
+    world_object: __sdk::TableAppliedDiff<'r, WorldObject>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -247,6 +281,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ServerConfig>(
             "server_config",
             &self.server_config,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<WorldObject>(
+            "world_object",
+            &self.world_object,
             event,
         );
     }
@@ -913,7 +952,13 @@ impl __sdk::SpacetimeModule for RemoteModule {
         player_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
         server_config_table::register_table(client_cache);
+        world_object_table::register_table(client_cache);
     }
-    const ALL_TABLE_NAMES: &'static [&'static str] =
-        &["chat_message", "player", "player_position", "server_config"];
+    const ALL_TABLE_NAMES: &'static [&'static str] = &[
+        "chat_message",
+        "player",
+        "player_position",
+        "server_config",
+        "world_object",
+    ];
 }
