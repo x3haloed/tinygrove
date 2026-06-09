@@ -16,6 +16,12 @@ const MAX_ASSET_STATUS_CHARS: usize = 16;
 const MAX_ASSET_FORMAT_CHARS: usize = 16;
 const MAX_ASSET_DATA_CHARS: usize = 262_144;
 const MAX_PLACE_RADIUS: i32 = MOVE_STEP * 8;
+const TILE_GRID_DIVISOR: i32 = 4;
+const TILE_PLACEMENT_W: i32 = 4;
+const TILE_PLACEMENT_H: i32 = 4;
+const DECORATION_PLACEMENT_FULL: &str = "Full";
+const DECORATION_PLACEMENT_HALF: &str = "Half Width";
+const DECORATION_PLACEMENT_QUARTER: &str = "Quarter";
 
 #[table(accessor = server_config, public)]
 pub struct ServerConfig {
@@ -357,8 +363,7 @@ pub fn create_content_asset(
     slug: String,
     status: String,
     grid_divisor: i32,
-    placement_w: i32,
-    placement_h: i32,
+    placement_variant: String,
     anchor_x: i32,
     anchor_y: i32,
     collidable: bool,
@@ -386,9 +391,8 @@ pub fn create_content_asset(
     if grid_divisor <= 0 {
         return Err("Grid divisor must be positive".to_string());
     }
-    if placement_w <= 0 || placement_h <= 0 {
-        return Err("Placement footprint must be positive".to_string());
-    }
+    let (placement_w, placement_h, collidable, transparent_allowed) =
+        normalize_asset_shape(&asset_kind, placement_variant, collidable, transparent_allowed)?;
 
     ctx.db.content_asset().insert(ContentAsset {
         id: 0,
@@ -425,8 +429,7 @@ pub fn update_content_asset(
     slug: String,
     status: String,
     grid_divisor: i32,
-    placement_w: i32,
-    placement_h: i32,
+    placement_variant: String,
     anchor_x: i32,
     anchor_y: i32,
     collidable: bool,
@@ -459,6 +462,12 @@ pub fn update_content_asset(
     let render_bytes = clean_asset_data(render_bytes)?;
     let collision_bytes = clean_asset_data(collision_bytes)?;
     let preview_bytes = clean_asset_data(preview_bytes)?;
+    let (placement_w, placement_h, collidable, transparent_allowed) = normalize_asset_shape(
+        &existing.asset_kind,
+        placement_variant,
+        collidable,
+        transparent_allowed,
+    )?;
 
     ctx.db.content_asset().id().update(ContentAsset {
         id: asset_id,
@@ -485,6 +494,42 @@ pub fn update_content_asset(
     });
 
     Ok(())
+}
+
+fn normalize_asset_shape(
+    asset_kind: &str,
+    placement_variant: String,
+    collidable: bool,
+    transparent_allowed: bool,
+) -> Result<(i32, i32, bool, bool), String> {
+    match asset_kind {
+        "tile" => {
+            if placement_variant != DECORATION_PLACEMENT_FULL {
+                return Err("Tiles must use the full tile footprint".to_string());
+            }
+            if !collidable {
+                return Err("Tiles must be collidable".to_string());
+            }
+            if transparent_allowed {
+                return Err("Tiles cannot allow transparent pixels".to_string());
+            }
+            Ok((TILE_PLACEMENT_W, TILE_PLACEMENT_H, true, false))
+        }
+        "decoration" => {
+            let (placement_w, placement_h) = match placement_variant.as_str() {
+                DECORATION_PLACEMENT_FULL => (TILE_PLACEMENT_W, TILE_PLACEMENT_H),
+                DECORATION_PLACEMENT_HALF => (2, 4),
+                DECORATION_PLACEMENT_QUARTER => (2, 2),
+                _ => {
+                    return Err(format!(
+                        "Unsupported decoration placement variant {placement_variant}"
+                    ));
+                }
+            };
+            Ok((placement_w, placement_h, collidable, transparent_allowed))
+        }
+        _ => Err(format!("Unsupported asset kind {asset_kind}")),
+    }
 }
 
 #[reducer]
@@ -661,16 +706,23 @@ fn seed_content_assets(ctx: &ReducerContext) {
         return;
     }
 
-    for (asset_kind, name, slug, status, grid_divisor, placement_w, placement_h, collidable, transparent_allowed) in [
-        ("tile", "Grass", "grass", "published", 4, 1, 1, true, false),
-        ("tile", "Path", "path", "published", 4, 1, 1, true, false),
-        ("tile", "Water", "water", "published", 4, 1, 1, true, false),
-        ("tile", "Dirt", "dirt", "published", 4, 1, 1, true, false),
-        ("decoration", "Flower", "flower", "published", 4, 1, 1, false, true),
-        ("decoration", "Button", "button", "published", 4, 1, 1, true, true),
-        ("decoration", "Sign", "sign", "published", 4, 1, 1, true, true),
-        ("decoration", "Rock", "rock", "published", 4, 1, 1, true, true),
+    for (asset_kind, name, slug, status, grid_divisor, placement_variant, collidable, transparent_allowed) in [
+        ("tile", "Grass", "grass", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
+        ("tile", "Path", "path", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
+        ("tile", "Water", "water", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
+        ("tile", "Dirt", "dirt", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
+        ("decoration", "Flower", "flower", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_QUARTER, false, true),
+        ("decoration", "Button", "button", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_HALF, true, true),
+        ("decoration", "Sign", "sign", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true),
+        ("decoration", "Rock", "rock", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true),
     ] {
+        let (placement_w, placement_h, collidable, transparent_allowed) = normalize_asset_shape(
+            asset_kind,
+            placement_variant.to_string(),
+            collidable,
+            transparent_allowed,
+        )
+        .expect("seed content asset shape should be valid");
         ctx.db.content_asset().insert(ContentAsset {
             id: 0,
             owner: ctx.sender(),

@@ -200,8 +200,6 @@ func _on_save_pressed() -> void:
 		"slug": slug_edit.text,
 		"kind": kind_name,
 		"grid_divisor": int(grid_divisor.value),
-		"placement_w": footprint.x,
-		"placement_h": footprint.y,
 		"placement_variant": placement_variant,
 		"collidable": true if is_tile else collidable_check.button_pressed,
 		"transparent_allowed": false if is_tile else transparent_check.button_pressed,

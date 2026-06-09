@@ -275,8 +275,10 @@ impl TinyGroveClient {
         let slug = data.get("slug").map(|v: Variant| v.to_string()).unwrap_or_default();
         let status = data.get("status").map(|v: Variant| v.to_string()).unwrap_or_default();
         let grid_divisor = data.get("grid_divisor").map(|v: Variant| v.to::<i64>()).unwrap_or(4) as i32;
-        let placement_w = data.get("placement_w").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
-        let placement_h = data.get("placement_h").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let placement_variant = data
+            .get("placement_variant")
+            .map(|v: Variant| v.to_string())
+            .unwrap_or_default();
         let anchor_x = data.get("anchor_x").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
         let anchor_y = data.get("anchor_y").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
         let collidable = data.get("collidable").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
@@ -294,8 +296,7 @@ impl TinyGroveClient {
             slug,
             status,
             grid_divisor,
-            placement_w,
-            placement_h,
+            placement_variant,
             anchor_x,
             anchor_y,
             collidable,
@@ -322,13 +323,14 @@ impl TinyGroveClient {
             return false;
         };
 
-        let asset_kind = data.get("kind").map(|v: Variant| v.to_string()).unwrap_or_default();
         let name = data.get("name").map(|v: Variant| v.to_string()).unwrap_or_default();
         let slug = data.get("slug").map(|v: Variant| v.to_string()).unwrap_or_default();
         let status = data.get("status").map(|v: Variant| v.to_string()).unwrap_or_default();
         let grid_divisor = data.get("grid_divisor").map(|v: Variant| v.to::<i64>()).unwrap_or(4) as i32;
-        let placement_w = data.get("placement_w").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
-        let placement_h = data.get("placement_h").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let placement_variant = data
+            .get("placement_variant")
+            .map(|v: Variant| v.to_string())
+            .unwrap_or_default();
         let anchor_x = data.get("anchor_x").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
         let anchor_y = data.get("anchor_y").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
         let collidable = data.get("collidable").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
@@ -346,8 +348,7 @@ impl TinyGroveClient {
             slug,
             status,
             grid_divisor,
-            placement_w,
-            placement_h,
+            placement_variant,
             anchor_x,
             anchor_y,
             collidable,
