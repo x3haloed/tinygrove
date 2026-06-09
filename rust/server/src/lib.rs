@@ -9,6 +9,7 @@ const PLOT_COLUMNS: i32 = 4;
 const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
 const MAX_OBJECT_KIND_CHARS: usize = 24;
+const MAX_TILE_KIND_CHARS: usize = 24;
 const MAX_PLACE_RADIUS: i32 = MOVE_STEP * 8;
 
 #[table(accessor = server_config, public)]
@@ -73,6 +74,19 @@ pub struct WorldObject {
     pub x: i32,
     pub y: i32,
     pub state: i32,
+    pub created_by: Identity,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[table(accessor = world_tile, public)]
+pub struct WorldTile {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub kind: String,
+    pub x: i32,
+    pub y: i32,
     pub created_by: Identity,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -248,6 +262,52 @@ pub fn place_object(
         x: target.0,
         y: target.1,
         state: 0,
+        created_by: ctx.sender(),
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+    });
+
+    Ok(())
+}
+
+#[reducer]
+pub fn place_tile(
+    ctx: &ReducerContext,
+    kind: String,
+    target_x: i32,
+    target_y: i32,
+) -> Result<(), String> {
+    require_joined(ctx)?;
+
+    let kind = clean_tile_kind(kind)?;
+    let position = require_position(ctx)?;
+    let target = (target_x, target_y);
+    let plot = require_plot(ctx)?;
+
+    if !within_place_radius(&position, target.0, target.1) {
+        return Err(format!(
+            "You can only place within {MAX_PLACE_RADIUS} world units of your current position"
+        ));
+    }
+
+    if !plot_contains(&plot, target.0, target.1) {
+        return Err("You can only place tiles inside your plot".to_string());
+    }
+
+    if ctx
+        .db
+        .world_tile()
+        .iter()
+        .any(|tile| tile.x == target.0 && tile.y == target.1)
+    {
+        return Err("There is already a tile there".to_string());
+    }
+
+    ctx.db.world_tile().insert(WorldTile {
+        id: 0,
+        kind,
+        x: target.0,
+        y: target.1,
         created_by: ctx.sender(),
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
@@ -464,5 +524,21 @@ fn clean_object_kind(kind: String) -> Result<String, String> {
     match kind.as_str() {
         "button" | "flower" | "rock" | "sign" => Ok(kind),
         _ => Err("Object kind must be button, flower, rock, or sign".to_string()),
+    }
+}
+
+fn clean_tile_kind(kind: String) -> Result<String, String> {
+    let kind = kind.trim().to_lowercase();
+    if kind.is_empty() {
+        return Err("Tile kind cannot be empty".to_string());
+    }
+    if kind.chars().count() > MAX_TILE_KIND_CHARS {
+        return Err(format!(
+            "Tile kind must be {MAX_TILE_KIND_CHARS} characters or fewer"
+        ));
+    }
+    match kind.as_str() {
+        "grass" | "path" | "water" | "dirt" => Ok(kind),
+        _ => Err("Tile kind must be grass, path, water, or dirt".to_string()),
     }
 }

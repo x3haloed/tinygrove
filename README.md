@@ -4,7 +4,7 @@ Tiny Grove is an early multiplayer game prototype about shared presence, player-
 
 The first goal is deliberately modest: a 2D Godot play canvas where friends can join the same SpacetimeDB-backed world, move simple avatars around, and send chat messages. The larger direction is a collaborative game where players customize their own chunks with tiles, sprites, and declarative game rules such as buttons, triggers, and interactions.
 
-The first real UGC step is mouse-driven placement: players enter a place mode, move a preview with the cursor, and place selected objects only within a server-validated radius around their character.
+The first real UGC step is mouse-driven placement: players enter a place mode, move a preview with the cursor, and place either ground tiles or top-of-tile objects only within a server-validated radius around their character.
 
 ## Project Shape
 
@@ -72,6 +72,7 @@ Reducers:
 - `move_player(dx, dy)`
 - `send_chat(body)`
 - `place_object(kind, target_x, target_y)`
+- `place_tile(kind, target_x, target_y)`
 
 The join path already includes a client protocol check so future live upgrade work has a simple compatibility hook from the start.
 

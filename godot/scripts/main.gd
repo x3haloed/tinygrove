@@ -45,6 +45,7 @@ const PLACE_PREVIEW_SNAP := TILE_SIZE
 var client: RefCounted
 var avatars: Dictionary = {}
 var world_objects: Dictionary = {}
+var world_tiles: Dictionary = {}
 var player_plots: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
 var chat_messages_seen: Dictionary = {}
@@ -53,6 +54,7 @@ var local_identity := ""
 var camera_position := Vector2.ZERO
 var camera_initialized := false
 var place_mode := false
+var place_layer := "object"
 var place_kind := "flower"
 var place_target := Vector2.ZERO
 var place_target_clamped := Vector2.ZERO
@@ -131,9 +133,11 @@ func _input(event: InputEvent) -> void:
 			_cancel_place_mode()
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F:
-			_toggle_place_mode("flower")
+			_toggle_place_mode("object", "flower")
+		elif event.keycode == KEY_T:
+			_toggle_place_mode("tile", "grass")
 		elif event.keycode == KEY_B:
-			_toggle_place_mode("button")
+			_toggle_place_mode("object", "button")
 		elif event.keycode == KEY_ESCAPE and place_mode:
 			_cancel_place_mode()
 
@@ -171,11 +175,12 @@ func _handle_interaction() -> void:
 	if Input.is_action_just_pressed("interact"):
 		client.interact_near()
 
-func _toggle_place_mode(kind: String) -> void:
-	if place_mode and place_kind == kind:
+func _toggle_place_mode(layer: String, kind: String) -> void:
+	if place_mode and place_layer == layer and place_kind == kind:
 		_cancel_place_mode()
 		return
 	place_mode = true
+	place_layer = layer
 	place_kind = kind
 	_update_place_preview()
 	queue_redraw()
@@ -204,7 +209,11 @@ func _attempt_place_selected() -> void:
 		return
 	if not place_target_valid:
 		return
-	var sent: bool = client.place_object(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
+	var sent: bool = false
+	if place_layer == "tile":
+		sent = client.place_tile(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
+	else:
+		sent = client.place_object(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
 	if sent:
 		_cancel_place_mode()
 
@@ -235,7 +244,7 @@ func _update_status() -> void:
 	if not error.is_empty():
 		text += " | " + _short_error(error)
 	if place_mode:
-		text += " | placing %s within %d tiles" % [place_kind, PLACE_RADIUS_TILES]
+		text += " | placing %s %s within %d tiles" % [place_layer, place_kind, PLACE_RADIUS_TILES]
 	status_label.text = text
 
 func _update_world() -> void:
@@ -313,11 +322,12 @@ func _update_world() -> void:
 			avatars.erase(identity)
 
 func _update_objects() -> void:
-	var seen := {}
+	var seen_objects := {}
+	var seen_tiles := {}
 	var record_events := agent_baseline_ready and _agent_is_logged_in()
 	for row in client.world_objects():
 		var id := int(row["id"])
-		seen[id] = true
+		seen_objects[id] = true
 		var object := _object_for(id)
 		var object_position := Vector2(float(row["x"]), float(row["y"]))
 		var kind := str(row["kind"])
@@ -353,8 +363,19 @@ func _update_objects() -> void:
 		object.z_index = int(object.position.y) - 1
 		object.queue_redraw()
 
+	for row in client.world_tiles():
+		var id := int(row["id"])
+		seen_tiles[id] = true
+		var tile := _tile_for(id)
+		var tile_position := Vector2(float(row["x"]), float(row["y"]))
+		tile.position = tile_position
+		tile.set_meta("kind", str(row["kind"]))
+		tile.set_meta("created_by", str(row.get("created_by", "")))
+		tile.z_index = int(tile.position.y) - 2
+		tile.queue_redraw()
+
 	for id in world_objects.keys():
-		if not seen.has(id):
+		if not seen_objects.has(id):
 			if record_events and agent_object_state.has(id):
 				var previous: Dictionary = agent_object_state[id]
 				var previous_position: Vector2 = previous["position"]
@@ -367,6 +388,11 @@ func _update_objects() -> void:
 			agent_object_state.erase(id)
 			world_objects[id].queue_free()
 			world_objects.erase(id)
+
+	for id in world_tiles.keys():
+		if not seen_tiles.has(id):
+			world_tiles[id].queue_free()
+			world_tiles.erase(id)
 	if _agent_is_logged_in() and not agent_baseline_ready:
 		agent_baseline_ready = true
 	elif not _agent_is_logged_in():
@@ -486,14 +512,18 @@ func _draw() -> void:
 
 	var origin_screen := _world_to_screen(local_avatar.world_target)
 	var target_screen := _world_to_screen(place_target_clamped)
-	var valid_color := Color(0.98, 0.88, 0.52, 0.95)
+	var valid_color := Color(0.98, 0.88, 0.52, 0.95) if place_layer == "object" else Color(0.52, 0.82, 0.96, 0.95)
 	var invalid_color := Color(0.94, 0.30, 0.24, 0.85)
 	var preview_color := valid_color if place_target_valid else invalid_color
 	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.10), 1.0, true)
 	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, preview_color, 2.0, false)
-	draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+	if place_layer == "tile":
+		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, true)
+		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+	else:
+		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
 	draw_line(origin_screen, target_screen, preview_color, 1.0)
-	draw_string(ThemeDB.fallback_font, origin_screen + Vector2(16, -12), "place %s" % place_kind, HORIZONTAL_ALIGNMENT_LEFT, 160, 12, preview_color)
+	draw_string(ThemeDB.fallback_font, origin_screen + Vector2(16, -12), "place %s %s" % [place_layer, place_kind], HORIZONTAL_ALIGNMENT_LEFT, 160, 12, preview_color)
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
@@ -524,6 +554,15 @@ func _object_for(id: int) -> Node2D:
 	world.add_child(object)
 	world_objects[id] = object
 	return object
+
+func _tile_for(id: int) -> Node2D:
+	if world_tiles.has(id):
+		return world_tiles[id]
+
+	var tile := WorldTileNode.new()
+	world.add_child(tile)
+	world_tiles[id] = tile
+	return tile
 
 func _style_ui() -> void:
 	var panel_style := StyleBoxFlat.new()
@@ -753,7 +792,7 @@ func _agent_help() -> Dictionary:
 			"POST /login - join gently; JSON body may include display_name",
 			"POST /move - move by direction and optional steps",
 			"POST /chat - send a chat message",
-			"POST /place - place flower, button, sign, or rock at an explicit target within the placement radius",
+			"POST /place - place an explicit object or tile target within the placement radius",
 			"POST /interact - interact with the nearby object you face",
 			"GET /screenshot - JPEG, downsampled to fit 1024x768",
 			"GET /screenshot?size=bigger - PNG, downsampled to fit 1280x720",
@@ -763,6 +802,7 @@ func _agent_help() -> Dictionary:
 			"No stream endpoint exists yet.",
 			"The snapshot describes only what is inside the current camera view.",
 			"Placement is only valid within a fixed radius of your current position; the server rejects targets outside that circle.",
+			"Use layer=tile with tile_kind=grass|path|water|dirt for ground placement, or layer=object with kind=flower|button|sign|rock for top-of-tile placement.",
 			"Action endpoints include a delta and advance your cursor.",
 			"If a response says you are not logged in, call POST /login and retry after a moment.",
 		],
@@ -832,11 +872,13 @@ func _agent_snapshot(advance_cursor := false) -> Dictionary:
 	var visible_players := _agent_visible_players(view_rect, local_position)
 	var visible_plots := _agent_visible_plots(view_rect)
 	var visible_objects := _agent_visible_objects(view_rect, local_position)
+	var visible_tiles := _agent_visible_tiles(view_rect, local_position)
 	var visible_bubbles := _agent_visible_bubbles(view_rect)
 	var placement := {
 		"radius_tiles": PLACE_RADIUS_TILES,
 		"radius_pixels": PLACE_RADIUS_PIXELS,
 		"note": "Targets outside this radius are invalid and will be rejected by the server.",
+		"layers": ["object", "tile"],
 	}
 	var hints := []
 	if not logged_in:
@@ -866,6 +908,7 @@ func _agent_snapshot(advance_cursor := false) -> Dictionary:
 		"visible_chat_bubbles": visible_bubbles,
 		"visible_plots": visible_plots,
 		"visible_objects": visible_objects,
+		"visible_tiles": visible_tiles,
 		"delta": _agent_delta_payload(agent_last_seen_cursor, advance_cursor),
 		"hints": hints,
 	}
@@ -931,26 +974,36 @@ func _agent_chat(body: String, query: Dictionary) -> Dictionary:
 
 func _agent_place(body: String, query: Dictionary) -> Dictionary:
 	var payload := _agent_json_payload(body)
-	var kind := str(query.get("kind", payload.get("kind", "flower"))).strip_edges().to_lower()
+	var layer := str(query.get("layer", payload.get("layer", "object"))).strip_edges().to_lower()
+	var kind_key := "tile_kind" if layer == "tile" else "kind"
+	var kind := str(query.get(kind_key, payload.get(kind_key, "flower" if layer != "tile" else "grass"))).strip_edges().to_lower()
 	var result := _agent_action_base("place")
 	if not result["ok"]:
 		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
 		return result
 	if kind.is_empty():
-		kind = "flower"
+		kind = "grass" if layer == "tile" else "flower"
 	var target := _agent_place_target(query, payload)
 	if target.is_empty():
 		result["ok"] = false
-		result["message"] = "Provide a target within %d tiles of your current position, for example POST /place with {\"kind\":\"flower\",\"tile_x\":12,\"tile_y\":7}." % PLACE_RADIUS_TILES
+		result["message"] = "Provide layer=tile and tile_kind, or layer=object and kind, with a target within %d tiles. Example: POST /place with {\"layer\":\"tile\",\"tile_kind\":\"grass\",\"tile_x\":12,\"tile_y\":7}." % PLACE_RADIUS_TILES
 		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
 		return result
 
-	var sent: bool = client.place_object(kind, int(target["x"]), int(target["y"]))
+	var sent: bool = false
+	if layer == "tile":
+		sent = client.place_tile(kind, int(target["x"]), int(target["y"]))
+	else:
+		sent = client.place_object(kind, int(target["x"]), int(target["y"]))
 	_agent_settle_after_action()
 	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
 	result["ok"] = sent
-	result["message"] = "Placed %s at %s." % [kind, _agent_point_text(Vector2(float(target["x"]), float(target["y"])))] if sent and int(delta["visible_event_count"]) > 0 else "Place request was sent, but no visible object delta arrived. The server may have rejected it, the target may be outside your plot, or the target may be outside the placement radius." if sent else "Place request could not be sent. Check the placement radius and plot boundaries."
-	result["kind"] = kind
+	result["message"] = "Placed %s %s at %s." % [layer, kind, _agent_point_text(Vector2(float(target["x"]), float(target["y"])))] if sent and int(delta["visible_event_count"]) > 0 else "Place request was sent, but no visible delta arrived. The server may have rejected it, the target may be outside your plot, or the target may be outside the placement radius." if sent else "Place request could not be sent. Check the placement radius and plot boundaries."
+	result["layer"] = layer
+	if layer == "tile":
+		result["tile_kind"] = kind
+	else:
+		result["kind"] = kind
 	result["target"] = target
 	result["delta"] = delta
 	return result
@@ -1132,6 +1185,30 @@ func _agent_visible_objects(view_rect: Rect2, local_position: Vector2) -> Dictio
 		"listed": included,
 		"grouped_overflow": _agent_group_objects(overflow),
 		"overflow_note": "Repetitive lower-priority objects are grouped after %d individual objects to save tokens." % AGENT_MAX_INDIVIDUAL_OBJECTS if overflow.size() > 0 else "",
+	}
+
+func _agent_visible_tiles(view_rect: Rect2, local_position: Vector2) -> Dictionary:
+	var tiles := []
+	for id in world_tiles.keys():
+		var tile: Node2D = world_tiles[id]
+		if not view_rect.has_point(tile.position):
+			continue
+		tiles.append({
+			"id": id,
+			"kind": str(tile.get_meta("kind", "tile")),
+			"position": _agent_point(tile.position),
+			"relative_to_you": _agent_relative_phrase(local_position, tile.position),
+			"view_area": _agent_area_phrase(tile.position, view_rect),
+			"_distance": local_position.distance_squared_to(tile.position),
+		})
+	tiles.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["_distance"]) < float(b["_distance"])
+	)
+	for tile in tiles:
+		tile.erase("_distance")
+	return {
+		"total_count": tiles.size(),
+		"listed": tiles,
 	}
 
 func _agent_group_objects(objects: Array) -> Array:
@@ -1623,6 +1700,37 @@ class WorldObjectNode:
 		var text: String = str(get_meta("text", ""))
 		if not text.is_empty():
 			draw_string(ThemeDB.fallback_font, Vector2(-13, -7), text.substr(0, 10), HORIZONTAL_ALIGNMENT_LEFT, 26, 8, Color(0.20, 0.14, 0.07))
+
+class WorldTileNode:
+	extends Node2D
+
+	func _draw() -> void:
+		var kind: String = str(get_meta("kind", "grass"))
+		match kind:
+			"path":
+				_draw_path()
+			"water":
+				_draw_water()
+			"dirt":
+				_draw_dirt()
+			_:
+				_draw_grass()
+
+	func _draw_grass() -> void:
+		draw_rect(Rect2(Vector2(-16, -16), Vector2(32, 32)), Color(0.35, 0.56, 0.32))
+		draw_rect(Rect2(Vector2(-14, -14), Vector2(28, 28)), Color(0.40, 0.64, 0.36, 0.35))
+
+	func _draw_path() -> void:
+		draw_rect(Rect2(Vector2(-16, -16), Vector2(32, 32)), Color(0.69, 0.59, 0.39))
+		draw_rect(Rect2(Vector2(-14, -14), Vector2(28, 28)), Color(0.76, 0.66, 0.45, 0.30))
+
+	func _draw_water() -> void:
+		draw_rect(Rect2(Vector2(-16, -16), Vector2(32, 32)), Color(0.22, 0.48, 0.74))
+		draw_rect(Rect2(Vector2(-14, -14), Vector2(28, 28)), Color(0.34, 0.64, 0.90, 0.35))
+
+	func _draw_dirt() -> void:
+		draw_rect(Rect2(Vector2(-16, -16), Vector2(32, 32)), Color(0.47, 0.34, 0.20))
+		draw_rect(Rect2(Vector2(-14, -14), Vector2(28, 28)), Color(0.58, 0.42, 0.24, 0.25))
 
 class PlotLayerNode:
 	extends Node2D

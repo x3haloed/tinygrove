@@ -12,6 +12,7 @@ pub mod interact_near_reducer;
 pub mod join_game_reducer;
 pub mod move_player_reducer;
 pub mod place_object_reducer;
+pub mod place_tile_reducer;
 pub mod player_plot_table;
 pub mod player_plot_type;
 pub mod player_position_table;
@@ -23,6 +24,8 @@ pub mod server_config_table;
 pub mod server_config_type;
 pub mod world_object_table;
 pub mod world_object_type;
+pub mod world_tile_table;
+pub mod world_tile_type;
 
 pub use chat_message_table::*;
 pub use chat_message_type::ChatMessage;
@@ -30,6 +33,7 @@ pub use interact_near_reducer::interact_near;
 pub use join_game_reducer::join_game;
 pub use move_player_reducer::move_player;
 pub use place_object_reducer::place_object;
+pub use place_tile_reducer::place_tile;
 pub use player_plot_table::*;
 pub use player_plot_type::PlayerPlot;
 pub use player_position_table::*;
@@ -41,6 +45,8 @@ pub use server_config_table::*;
 pub use server_config_type::ServerConfig;
 pub use world_object_table::*;
 pub use world_object_type::WorldObject;
+pub use world_tile_table::*;
+pub use world_tile_type::WorldTile;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -65,6 +71,11 @@ pub enum Reducer {
         target_x: i32,
         target_y: i32,
     },
+    PlaceTile {
+        kind: String,
+        target_x: i32,
+        target_y: i32,
+    },
     SendChat {
         body: String,
     },
@@ -81,6 +92,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::JoinGame { .. } => "join_game",
             Reducer::MovePlayer { .. } => "move_player",
             Reducer::PlaceObject { .. } => "place_object",
+            Reducer::PlaceTile { .. } => "place_tile",
             Reducer::SendChat { .. } => "send_chat",
             _ => unreachable!(),
         }
@@ -115,6 +127,15 @@ impl __sdk::Reducer for Reducer {
                 target_x: target_x.clone(),
                 target_y: target_y.clone(),
             }),
+            Reducer::PlaceTile {
+                kind,
+                target_x,
+                target_y,
+            } => __sats::bsatn::to_vec(&place_tile_reducer::PlaceTileArgs {
+                kind: kind.clone(),
+                target_x: target_x.clone(),
+                target_y: target_y.clone(),
+            }),
             Reducer::SendChat { body } => {
                 __sats::bsatn::to_vec(&send_chat_reducer::SendChatArgs { body: body.clone() })
             }
@@ -133,6 +154,7 @@ pub struct DbUpdate {
     player_position: __sdk::TableUpdate<PlayerPosition>,
     server_config: __sdk::TableUpdate<ServerConfig>,
     world_object: __sdk::TableUpdate<WorldObject>,
+    world_tile: __sdk::TableUpdate<WorldTile>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -159,6 +181,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "world_object" => db_update
                     .world_object
                     .append(world_object_table::parse_table_update(table_update)?),
+                "world_tile" => db_update
+                    .world_tile
+                    .append(world_tile_table::parse_table_update(table_update)?),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -203,6 +228,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.world_object = cache
             .apply_diff_to_table::<WorldObject>("world_object", &self.world_object)
             .with_updates_by_pk(|row| &row.id);
+        diff.world_tile = cache
+            .apply_diff_to_table::<WorldTile>("world_tile", &self.world_tile)
+            .with_updates_by_pk(|row| &row.id);
 
         diff
     }
@@ -227,6 +255,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "world_object" => db_update
                     .world_object
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "world_tile" => db_update
+                    .world_tile
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -259,6 +290,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "world_object" => db_update
                     .world_object
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "world_tile" => db_update
+                    .world_tile
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
                         __sdk::InternalError::unknown_name("table", unknown, "QueryRows").into(),
@@ -280,6 +314,7 @@ pub struct AppliedDiff<'r> {
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
     server_config: __sdk::TableAppliedDiff<'r, ServerConfig>,
     world_object: __sdk::TableAppliedDiff<'r, WorldObject>,
+    world_tile: __sdk::TableAppliedDiff<'r, WorldTile>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -315,6 +350,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.world_object,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<WorldTile>("world_tile", &self.world_tile, event);
     }
 }
 
@@ -981,6 +1017,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         player_position_table::register_table(client_cache);
         server_config_table::register_table(client_cache);
         world_object_table::register_table(client_cache);
+        world_tile_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "chat_message",
@@ -989,5 +1026,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "player_position",
         "server_config",
         "world_object",
+        "world_tile",
     ];
 }
