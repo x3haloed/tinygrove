@@ -69,3 +69,92 @@ placeholder_text = "Message"
 [node name="SendButton" type="Button" parent="ChatInput/ChatRow"]
 layout_mode = 2
 text = "Send"
+
+[node name="LibraryOverlay" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="LibraryRoot" type="VBoxContainer" parent="LibraryOverlay"]
+layout_mode = 2
+
+[node name="LibraryHeader" type="HBoxContainer" parent="LibraryOverlay/LibraryRoot"]
+layout_mode = 2
+
+[node name="LibraryTitle" type="Label" parent="LibraryOverlay/LibraryRoot/LibraryHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Placement Library"
+
+[node name="LibraryClose" type="Button" parent="LibraryOverlay/LibraryRoot/LibraryHeader"]
+layout_mode = 2
+text = "Esc"
+
+[node name="LibraryTabs" type="HBoxContainer" parent="LibraryOverlay/LibraryRoot"]
+layout_mode = 2
+
+[node name="TileTab" type="Button" parent="LibraryOverlay/LibraryRoot/LibraryTabs"]
+layout_mode = 2
+text = "Tiles"
+toggle_mode = true
+button_pressed = true
+
+[node name="ObjectTab" type="Button" parent="LibraryOverlay/LibraryRoot/LibraryTabs"]
+layout_mode = 2
+text = "Decorations"
+toggle_mode = true
+
+[node name="LibraryBody" type="HSplitContainer" parent="LibraryOverlay/LibraryRoot"]
+layout_mode = 2
+split_offset = 520
+
+[node name="LibraryGridPanel" type="PanelContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody"]
+layout_mode = 2
+
+[node name="LibraryGridScroll" type="ScrollContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryGridPanel"]
+layout_mode = 2
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="LibraryGrid" type="GridContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryGridPanel/LibraryGridScroll"]
+layout_mode = 2
+columns = 4
+
+[node name="LibraryPreviewPanel" type="PanelContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody"]
+layout_mode = 2
+
+[node name="LibraryPreviewRoot" type="VBoxContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel"]
+layout_mode = 2
+
+[node name="LibraryPreviewTitle" type="Label" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot"]
+layout_mode = 2
+text = "Select an item"
+
+[node name="LibraryPreviewBox" type="PanelContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 320)
+
+[node name="LibraryPreviewCanvas" type="Control" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryPreviewBox"]
+layout_mode = 2
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="LibraryPreviewDesc" type="Label" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot"]
+layout_mode = 2
+autowrap_mode = 3
+text = "Choose an item from the grid."
+
+[node name="LibraryActions" type="HBoxContainer" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot"]
+layout_mode = 2
+
+[node name="LibraryPlaceButton" type="Button" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryActions"]
+layout_mode = 2
+text = "Place"
+
+[node name="LibraryCancelButton" type="Button" parent="LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryActions"]
+layout_mode = 2
+text = "Cancel"

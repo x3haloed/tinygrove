@@ -41,6 +41,16 @@ const PLACE_PREVIEW_SNAP := TILE_SIZE
 @onready var recent_label: Label = $Hud/VBox/Recent
 @onready var chat_edit: LineEdit = $ChatInput/ChatRow/ChatEdit
 @onready var send_button: Button = $ChatInput/ChatRow/SendButton
+@onready var library_overlay: PanelContainer = $LibraryOverlay
+@onready var library_close_button: Button = $LibraryOverlay/LibraryRoot/LibraryHeader/LibraryClose
+@onready var library_tile_tab: Button = $LibraryOverlay/LibraryRoot/LibraryTabs/TileTab
+@onready var library_object_tab: Button = $LibraryOverlay/LibraryRoot/LibraryTabs/ObjectTab
+@onready var library_grid: GridContainer = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryGridPanel/LibraryGridScroll/LibraryGrid
+@onready var library_preview_title: Label = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryPreviewTitle
+@onready var library_preview_desc: Label = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryPreviewDesc
+@onready var library_preview_canvas: Control = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryPreviewBox/LibraryPreviewCanvas
+@onready var library_place_button: Button = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryActions/LibraryPlaceButton
+@onready var library_cancel_button: Button = $LibraryOverlay/LibraryRoot/LibraryBody/LibraryPreviewPanel/LibraryPreviewRoot/LibraryActions/LibraryCancelButton
 
 var client: RefCounted
 var avatars: Dictionary = {}
@@ -56,6 +66,9 @@ var camera_initialized := false
 var place_mode := false
 var place_layer := "object"
 var place_kind := "flower"
+var library_open := false
+var library_category := "tile"
+var library_selected_kind := "grass"
 var place_target := Vector2.ZERO
 var place_target_clamped := Vector2.ZERO
 var place_target_valid := false
@@ -83,6 +96,20 @@ var agent_plot_state: Dictionary = {}
 var agent_seen_chat_ids: Dictionary = {}
 var agent_baseline_ready := false
 
+const TILE_LIBRARY := [
+	{"kind": "grass", "name": "Grass", "description": "Default ground cover for open plots."},
+	{"kind": "path", "name": "Path", "description": "A simple packed path tile for roads and walkways."},
+	{"kind": "water", "name": "Water", "description": "Blue water tile for ponds, canals, and edges."},
+	{"kind": "dirt", "name": "Dirt", "description": "A warmer earth tile for unfinished or natural areas."},
+]
+
+const OBJECT_LIBRARY := [
+	{"kind": "flower", "name": "Flower", "description": "A small decorative flower placed on top of a tile."},
+	{"kind": "button", "name": "Button", "description": "An interactive object that can be toggled."},
+	{"kind": "sign", "name": "Sign", "description": "An interactable sign for short authored messages."},
+	{"kind": "rock", "name": "Rock", "description": "A static decorative rock."},
+]
+
 func _ready() -> void:
 	world.y_sort_enabled = true
 	var ground := GroundNode.new()
@@ -94,6 +121,19 @@ func _ready() -> void:
 	_style_ui()
 	join_button.pressed.connect(_join_game)
 	send_button.pressed.connect(_send_chat)
+	library_close_button.pressed.connect(_close_library)
+	library_place_button.pressed.connect(_library_activate_selection)
+	library_cancel_button.pressed.connect(_close_library)
+	library_tile_tab.pressed.connect(func() -> void:
+		library_category = "tile"
+		library_selected_kind = "grass"
+		_update_library_tabs()
+	)
+	library_object_tab.pressed.connect(func() -> void:
+		library_category = "object"
+		library_selected_kind = "flower"
+		_update_library_tabs()
+	)
 	chat_edit.text_submitted.connect(func(_text: String) -> void: _send_chat())
 	_load_smoke_config()
 	_load_agent_config()
@@ -126,6 +166,10 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_update_place_preview()
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		_toggle_library()
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.pressed:
 		if place_mode and event.button_index == MOUSE_BUTTON_LEFT:
 			_attempt_place_selected()
@@ -140,6 +184,8 @@ func _input(event: InputEvent) -> void:
 			_toggle_place_mode("object", "button")
 		elif event.keycode == KEY_ESCAPE and place_mode:
 			_cancel_place_mode()
+		elif event.keycode == KEY_ESCAPE and library_open:
+			_close_library()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
@@ -189,6 +235,126 @@ func _cancel_place_mode() -> void:
 	place_mode = false
 	place_target_valid = false
 	queue_redraw()
+
+func _toggle_library() -> void:
+	library_open = not library_open
+	library_overlay.visible = library_open
+	if library_open:
+		_update_library_tabs()
+		_update_library_selection(library_selected_kind)
+	else:
+		library_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+func _close_library() -> void:
+	library_open = false
+	library_overlay.visible = false
+
+func _update_library_overlay() -> void:
+	library_overlay.visible = library_open
+	if not library_open:
+		return
+	_update_library_tabs()
+	_update_library_preview()
+
+func _update_library_tabs() -> void:
+	library_tile_tab.button_pressed = library_category == "tile"
+	library_object_tab.button_pressed = library_category == "object"
+	_refresh_library_grid()
+
+func _refresh_library_grid() -> void:
+	for child in library_grid.get_children():
+		child.queue_free()
+	var entries := TILE_LIBRARY if library_category == "tile" else OBJECT_LIBRARY
+	for entry in entries:
+		var button := Button.new()
+		button.text = str(entry["name"])
+		button.toggle_mode = true
+		button.button_pressed = str(entry["kind"]) == library_selected_kind
+		button.focus_mode = Control.FOCUS_ALL
+		button.custom_minimum_size = Vector2(120, 72)
+		button.pressed.connect(func() -> void:
+			_update_library_selection(str(entry["kind"]))
+		)
+		library_grid.add_child(button)
+
+func _update_library_selection(kind: String) -> void:
+	library_selected_kind = kind
+	_update_library_preview()
+	_refresh_library_grid()
+
+func _update_library_preview() -> void:
+	var entry := _library_entry_for(library_category, library_selected_kind)
+	if entry.is_empty():
+		library_preview_title.text = "Select an item"
+		library_preview_desc.text = ""
+		library_preview_canvas.queue_redraw()
+		return
+	library_preview_title.text = str(entry["name"])
+	library_preview_desc.text = str(entry["description"])
+	library_preview_canvas.queue_redraw()
+
+func _draw_library_preview() -> void:
+	var entry := _library_entry_for(library_category, library_selected_kind)
+	if entry.is_empty():
+		return
+	var kind := str(entry["kind"])
+	var preview_rect := library_preview_canvas.get_rect().grow(-24.0)
+	var center := preview_rect.get_center()
+	if library_category == "tile":
+		var tile_color := _tile_preview_color(kind)
+		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.09, 0.10, 0.12, 0.90))
+		draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), tile_color)
+		draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), Color(0.95, 0.92, 0.80), false, 4.0)
+		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
+	else:
+		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.09, 0.10, 0.12, 0.90))
+		_draw_library_object_preview(kind, center)
+		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
+
+func _draw_library_object_preview(kind: String, center: Vector2) -> void:
+	match kind:
+		"button":
+			draw_rect(Rect2(center + Vector2(-28, 16), Vector2(56, 12)), Color(0.18, 0.14, 0.10, 0.45))
+			draw_rect(Rect2(center + Vector2(-22, -4), Vector2(44, 30)), Color(0.38, 0.28, 0.20))
+			draw_rect(Rect2(center + Vector2(-16, -12), Vector2(32, 18)), Color(0.92, 0.28, 0.20))
+		"rock":
+			draw_rect(Rect2(center + Vector2(-30, 18), Vector2(60, 12)), Color(0.18, 0.14, 0.10, 0.35))
+			draw_rect(Rect2(center + Vector2(-26, -18), Vector2(52, 40)), Color(0.42, 0.45, 0.43))
+			draw_rect(Rect2(center + Vector2(-12, -28), Vector2(24, 16)), Color(0.55, 0.59, 0.56))
+		"sign":
+			draw_rect(Rect2(center + Vector2(-4, 6), Vector2(8, 52)), Color(0.36, 0.20, 0.10))
+			draw_rect(Rect2(center + Vector2(-42, -18), Vector2(84, 42)), Color(0.62, 0.40, 0.20))
+			draw_rect(Rect2(center + Vector2(-34, -8), Vector2(68, 24)), Color(0.78, 0.55, 0.30))
+		_:
+			draw_rect(Rect2(center + Vector2(-18, 24), Vector2(36, 20)), Color(0.16, 0.45, 0.18))
+			draw_rect(Rect2(center + Vector2(-30, -10), Vector2(18, 18)), Color(0.98, 0.82, 0.26))
+			draw_rect(Rect2(center + Vector2(12, -10), Vector2(18, 18)), Color(0.98, 0.54, 0.66))
+
+func _tile_preview_color(kind: String) -> Color:
+	match kind:
+		"path":
+			return Color(0.69, 0.59, 0.39)
+		"water":
+			return Color(0.22, 0.48, 0.74)
+		"dirt":
+			return Color(0.47, 0.34, 0.20)
+		_:
+			return Color(0.35, 0.56, 0.32)
+
+func _library_entry_for(category: String, kind: String) -> Dictionary:
+	var entries := TILE_LIBRARY if category == "tile" else OBJECT_LIBRARY
+	for entry in entries:
+		if str(entry["kind"]) == kind:
+			return entry
+	return {}
+
+func _library_activate_selection() -> void:
+	if library_open:
+		if library_category == "tile":
+			_toggle_place_mode("tile", library_selected_kind)
+		else:
+			_toggle_place_mode("object", library_selected_kind)
+		_close_library()
 
 func _update_place_preview() -> void:
 	if not place_mode or local_identity.is_empty() or not avatars.has(local_identity):
@@ -505,25 +671,45 @@ func _apply_camera() -> void:
 
 func _draw() -> void:
 	if not place_mode:
-		return
-	var local_avatar: AvatarNode = avatars.get(local_identity, null)
-	if local_avatar == null:
+		pass
+	else:
+		var local_avatar: AvatarNode = avatars.get(local_identity, null)
+		if local_avatar != null:
+			var origin_screen := _world_to_screen(local_avatar.world_target)
+			var target_screen := _world_to_screen(place_target_clamped)
+			var valid_color := Color(0.98, 0.88, 0.52, 0.95) if place_layer == "object" else Color(0.52, 0.82, 0.96, 0.95)
+			var invalid_color := Color(0.94, 0.30, 0.24, 0.85)
+			var preview_color := valid_color if place_target_valid else invalid_color
+			draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.10), 1.0, true)
+			draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, preview_color, 2.0, false)
+			if place_layer == "tile":
+				draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, true)
+				draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+			else:
+				draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+			draw_line(origin_screen, target_screen, preview_color, 1.0)
+			draw_string(ThemeDB.fallback_font, origin_screen + Vector2(16, -12), "place %s %s" % [place_layer, place_kind], HORIZONTAL_ALIGNMENT_LEFT, 160, 12, preview_color)
+
+	if not library_open:
 		return
 
-	var origin_screen := _world_to_screen(local_avatar.world_target)
-	var target_screen := _world_to_screen(place_target_clamped)
-	var valid_color := Color(0.98, 0.88, 0.52, 0.95) if place_layer == "object" else Color(0.52, 0.82, 0.96, 0.95)
-	var invalid_color := Color(0.94, 0.30, 0.24, 0.85)
-	var preview_color := valid_color if place_target_valid else invalid_color
-	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.10), 1.0, true)
-	draw_arc(origin_screen, float(PLACE_RADIUS_PIXELS), 0.0, TAU, 48, preview_color, 2.0, false)
-	if place_layer == "tile":
-		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, true)
-		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
+	var pane_rect := library_preview_canvas.get_global_rect()
+	var entry := _library_entry_for(library_category, library_selected_kind)
+	if entry.is_empty():
+		return
+	var kind := str(entry["kind"])
+	var center := pane_rect.get_center()
+	var bg := Color(0.08, 0.09, 0.11, 0.95)
+	draw_rect(pane_rect, bg, true)
+	draw_rect(pane_rect, Color(0.95, 0.92, 0.80, 0.35), false, 2.0)
+	if library_category == "tile":
+		var tile_color := _tile_preview_color(kind)
+		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), tile_color)
+		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.95, 0.92, 0.80), false, 4.0)
+		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
 	else:
-		draw_rect(Rect2(target_screen - Vector2(TILE_SIZE * 0.5, TILE_SIZE * 0.5), Vector2(TILE_SIZE, TILE_SIZE)), preview_color, false, 2.0)
-	draw_line(origin_screen, target_screen, preview_color, 1.0)
-	draw_string(ThemeDB.fallback_font, origin_screen + Vector2(16, -12), "place %s %s" % [place_layer, place_kind], HORIZONTAL_ALIGNMENT_LEFT, 160, 12, preview_color)
+		_draw_library_object_preview(kind, center)
+		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
