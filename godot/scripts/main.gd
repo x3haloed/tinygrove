@@ -169,6 +169,15 @@ func _input(event: InputEvent) -> void:
 		if _release_ui_focus_or_close_overlay():
 			get_viewport().set_input_as_handled()
 			return
+	if event is InputEventMouseButton and event.pressed:
+		if _gameplay_input_blocked():
+			return
+		if place_mode and event.button_index == MOUSE_BUTTON_LEFT:
+			_attempt_place_selected()
+			get_viewport().set_input_as_handled()
+		elif place_mode and event.button_index == MOUSE_BUTTON_RIGHT:
+			_cancel_place_mode()
+			get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _gameplay_input_blocked():
@@ -176,11 +185,6 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseMotion:
 		_update_place_preview()
-	if event is InputEventMouseButton and event.pressed:
-		if place_mode and event.button_index == MOUSE_BUTTON_LEFT:
-			_attempt_place_selected()
-		elif place_mode and event.button_index == MOUSE_BUTTON_RIGHT:
-			_cancel_place_mode()
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F:
 			_toggle_place_mode("tile", "flower")
