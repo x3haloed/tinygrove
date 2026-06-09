@@ -8,5 +8,6 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+base64 = "0.22"
 log = "0.4"
 spacetimedb = "=2.1.0"

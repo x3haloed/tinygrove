@@ -54,7 +54,6 @@ const PLACE_PREVIEW_SNAP := TILE_SIZE
 
 var client: RefCounted
 var avatars: Dictionary = {}
-var world_objects: Dictionary = {}
 var world_tiles: Dictionary = {}
 var player_plots: Dictionary = {}
 var latest_chat_by_sender: Dictionary = {}
@@ -64,7 +63,7 @@ var local_identity := ""
 var camera_position := Vector2.ZERO
 var camera_initialized := false
 var place_mode := false
-var place_layer := "object"
+var place_layer := "tile"
 var place_kind := "flower"
 var library_open := false
 var library_category := "tile"
@@ -73,6 +72,9 @@ var place_target := Vector2.ZERO
 var place_target_clamped := Vector2.ZERO
 var place_target_valid := false
 var pixel_editor: Control
+var content_assets_by_kind: Dictionary = {}
+var content_asset_textures: Dictionary = {}
+var content_asset_preview_textures: Dictionary = {}
 var move_elapsed := 0.0
 var frame := 0
 var smoke_enabled := false
@@ -96,20 +98,6 @@ var agent_object_state: Dictionary = {}
 var agent_plot_state: Dictionary = {}
 var agent_seen_chat_ids: Dictionary = {}
 var agent_baseline_ready := false
-
-const TILE_LIBRARY := [
-	{"kind": "grass", "name": "Grass", "description": "Default ground cover for open plots."},
-	{"kind": "path", "name": "Path", "description": "A simple packed path tile for roads and walkways."},
-	{"kind": "water", "name": "Water", "description": "Blue water tile for ponds, canals, and edges."},
-	{"kind": "dirt", "name": "Dirt", "description": "A warmer earth tile for unfinished or natural areas."},
-]
-
-const OBJECT_LIBRARY := [
-	{"kind": "flower", "name": "Flower", "description": "A small decorative flower placed on top of a tile."},
-	{"kind": "button", "name": "Button", "description": "An interactive object that can be toggled."},
-	{"kind": "sign", "name": "Sign", "description": "An interactable sign for short authored messages."},
-	{"kind": "rock", "name": "Rock", "description": "A static decorative rock."},
-]
 
 func _ready() -> void:
 	world.y_sort_enabled = true
@@ -157,6 +145,7 @@ func _process(delta: float) -> void:
 		return
 	frame += 1
 	client.poll()
+	_refresh_content_asset_cache()
 	_update_agent_registry(delta)
 	_run_smoke_actions()
 	_update_status()
@@ -184,11 +173,11 @@ func _input(event: InputEvent) -> void:
 			_cancel_place_mode()
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F:
-			_toggle_place_mode("object", "flower")
+			_toggle_place_mode("tile", "flower")
 		elif event.keycode == KEY_T:
 			_toggle_place_mode("tile", "grass")
 		elif event.keycode == KEY_B:
-			_toggle_place_mode("object", "button")
+			_toggle_place_mode("tile", "button")
 		elif event.keycode == KEY_P:
 			pixel_editor.visible = not pixel_editor.visible
 			if pixel_editor.visible:
@@ -274,12 +263,17 @@ func _update_library_overlay() -> void:
 func _update_library_tabs() -> void:
 	library_tile_tab.button_pressed = library_category == "tile"
 	library_object_tab.button_pressed = library_category == "object"
+	var entries := _library_entries_for(library_category)
+	if entries.is_empty():
+		library_selected_kind = ""
+	elif _library_entry_for(library_category, library_selected_kind).is_empty():
+		library_selected_kind = str(entries[0]["kind"])
 	_refresh_library_grid()
 
 func _refresh_library_grid() -> void:
 	for child in library_grid.get_children():
 		child.queue_free()
-	var entries := TILE_LIBRARY if library_category == "tile" else OBJECT_LIBRARY
+	var entries := _library_entries_for(library_category)
 	for entry in entries:
 		var button := Button.new()
 		button.text = str(entry["name"])
@@ -315,35 +309,99 @@ func _draw_library_preview() -> void:
 	var kind := str(entry["kind"])
 	var preview_rect := library_preview_canvas.get_rect().grow(-24.0)
 	var center := preview_rect.get_center()
-	if library_category == "tile":
-		var tile_color := _tile_preview_color(kind)
-		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.09, 0.10, 0.12, 0.90))
-		draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), tile_color)
-		draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), Color(0.95, 0.92, 0.80), false, 4.0)
-		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
-	else:
-		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.09, 0.10, 0.12, 0.90))
-		_draw_library_object_preview(kind, center)
-		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
+	draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.09, 0.10, 0.12, 0.90))
+	var texture := _content_asset_preview_texture(kind)
+	if texture != null:
+		var tex_size := Vector2(texture.get_width(), texture.get_height())
+		var scale := minf(192.0 / maxf(tex_size.x, 1.0), 192.0 / maxf(tex_size.y, 1.0))
+		var draw_size := tex_size * scale
+		draw_texture_rect(texture, Rect2(center - draw_size * 0.5, draw_size), false)
+	if library_category == "object" and kind == "button":
+		draw_rect(Rect2(center + Vector2(-34, 34), Vector2(68, 8)), Color(0.12, 0.10, 0.08, 0.40))
+		draw_rect(Rect2(center + Vector2(-18, -18), Vector2(36, 16)), Color(0.15, 0.70, 0.35, 0.22))
+	draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), Color(0.95, 0.92, 0.80), false, 4.0)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), str(entry["name"]), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
 
-func _draw_library_object_preview(kind: String, center: Vector2) -> void:
-	match kind:
-		"button":
-			draw_rect(Rect2(center + Vector2(-28, 16), Vector2(56, 12)), Color(0.18, 0.14, 0.10, 0.45))
-			draw_rect(Rect2(center + Vector2(-22, -4), Vector2(44, 30)), Color(0.38, 0.28, 0.20))
-			draw_rect(Rect2(center + Vector2(-16, -12), Vector2(32, 18)), Color(0.92, 0.28, 0.20))
-		"rock":
-			draw_rect(Rect2(center + Vector2(-30, 18), Vector2(60, 12)), Color(0.18, 0.14, 0.10, 0.35))
-			draw_rect(Rect2(center + Vector2(-26, -18), Vector2(52, 40)), Color(0.42, 0.45, 0.43))
-			draw_rect(Rect2(center + Vector2(-12, -28), Vector2(24, 16)), Color(0.55, 0.59, 0.56))
-		"sign":
-			draw_rect(Rect2(center + Vector2(-4, 6), Vector2(8, 52)), Color(0.36, 0.20, 0.10))
-			draw_rect(Rect2(center + Vector2(-42, -18), Vector2(84, 42)), Color(0.62, 0.40, 0.20))
-			draw_rect(Rect2(center + Vector2(-34, -8), Vector2(68, 24)), Color(0.78, 0.55, 0.30))
-		_:
-			draw_rect(Rect2(center + Vector2(-18, 24), Vector2(36, 20)), Color(0.16, 0.45, 0.18))
-			draw_rect(Rect2(center + Vector2(-30, -10), Vector2(18, 18)), Color(0.98, 0.82, 0.26))
-			draw_rect(Rect2(center + Vector2(12, -10), Vector2(18, 18)), Color(0.98, 0.54, 0.66))
+func _library_entry_for(category: String, kind: String) -> Dictionary:
+	var entries := _library_entries_for(category)
+	for entry in entries:
+		if str(entry["kind"]) == kind:
+			return entry
+	return {}
+
+func _library_entries_for(category: String) -> Array:
+	var assets: Array = content_assets_by_kind.get(category, [])
+	var entries: Array = []
+	for asset in assets:
+		var key := str(asset.get("slug", ""))
+		if key.is_empty():
+			key = str(asset.get("name", "")).to_lower()
+		entries.append({
+			"kind": key,
+			"name": str(asset.get("name", "")),
+			"description": _content_asset_description(asset),
+			"button_pressed": key == "button",
+		})
+	return entries
+
+func _content_asset_description(asset: Dictionary) -> String:
+	var asset_kind := str(asset.get("asset_kind", ""))
+	var placement := str(asset.get("placement_variant", ""))
+	if asset_kind == "tile":
+		return "Tile asset, %s placement." % placement.to_lower()
+	if asset_kind == "decoration":
+		return "Decoration asset, %s placement." % placement.to_lower()
+	return "Content asset."
+
+func _refresh_content_asset_cache() -> void:
+	if client == null:
+		return
+	var rows: Array = client.content_assets()
+	var next_by_kind := {"tile": [], "object": []}
+	var next_textures := {}
+	var next_preview_textures := {}
+	for row in rows:
+		var asset_kind := str(row.get("asset_kind", ""))
+		var group := "tile" if asset_kind == "tile" else "object" if asset_kind == "decoration" else ""
+		if group.is_empty():
+			continue
+		next_by_kind[group].append(row)
+		var kind := str(row.get("slug", ""))
+		if kind.is_empty():
+			kind = str(row.get("name", "")).to_lower()
+		var render_texture := _texture_from_base64(str(row.get("render_bytes", "")))
+		if render_texture != null:
+			next_textures[kind] = render_texture
+		var preview_texture := _texture_from_base64(str(row.get("preview_bytes", "")))
+		if preview_texture == null:
+			preview_texture = render_texture
+		if preview_texture != null:
+			next_preview_textures[kind] = preview_texture
+	content_assets_by_kind = next_by_kind
+	content_asset_textures = next_textures
+	content_asset_preview_textures = next_preview_textures
+
+func _content_asset_texture(kind: String) -> Texture2D:
+	if content_asset_textures.has(kind):
+		return content_asset_textures[kind]
+	return null
+
+func _texture_from_base64(encoded: String) -> Texture2D:
+	if encoded.is_empty():
+		return null
+	var bytes := Marshalls.base64_to_raw(encoded)
+	if bytes.is_empty():
+		return null
+	var image := Image.new()
+	var error := image.load_png_from_buffer(bytes)
+	if error != OK:
+		return null
+	return ImageTexture.create_from_image(image)
+
+func _content_asset_preview_texture(kind: String) -> Texture2D:
+	if content_asset_preview_textures.has(kind):
+		return content_asset_preview_textures[kind]
+	return null
 
 func _tile_preview_color(kind: String) -> Color:
 	match kind:
@@ -356,19 +414,12 @@ func _tile_preview_color(kind: String) -> Color:
 		_:
 			return Color(0.35, 0.56, 0.32)
 
-func _library_entry_for(category: String, kind: String) -> Dictionary:
-	var entries := TILE_LIBRARY if category == "tile" else OBJECT_LIBRARY
-	for entry in entries:
-		if str(entry["kind"]) == kind:
-			return entry
-	return {}
-
 func _library_activate_selection() -> void:
 	if library_open:
 		if library_category == "tile":
 			_toggle_place_mode("tile", library_selected_kind)
 		else:
-			_toggle_place_mode("object", library_selected_kind)
+			_toggle_place_mode("tile", library_selected_kind)
 		_close_library()
 
 func _on_pixel_editor_save(data: Dictionary) -> void:
@@ -402,10 +453,7 @@ func _attempt_place_selected() -> void:
 	if not place_target_valid:
 		return
 	var sent: bool = false
-	if place_layer == "tile":
-		sent = client.place_tile(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
-	else:
-		sent = client.place_object(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
+	sent = client.place_tile(place_kind, int(place_target_clamped.x), int(place_target_clamped.y))
 	if sent:
 		_cancel_place_mode()
 
@@ -514,72 +562,23 @@ func _update_world() -> void:
 			avatars.erase(identity)
 
 func _update_objects() -> void:
-	var seen_objects := {}
 	var seen_tiles := {}
 	var record_events := agent_baseline_ready and _agent_is_logged_in()
-	for row in client.world_objects():
-		var id := int(row["id"])
-		seen_objects[id] = true
-		var object := _object_for(id)
-		var object_position := Vector2(float(row["x"]), float(row["y"]))
-		var kind := str(row["kind"])
-		var state := int(row["state"])
-		var previous: Dictionary = agent_object_state.get(id, {})
-		var object_state := {
-			"kind": kind,
-			"position": object_position,
-			"state": state,
-			"updated_at_micros": int(row.get("updated_at_micros", 0)),
-		}
-		if record_events:
-			if previous.is_empty():
-				_agent_record_event("object_appeared", "A %s appeared at %s." % [kind, _agent_point_text(object_position)], object_position, {
-					"id": id,
-					"kind": kind,
-					"position": _agent_point(object_position),
-					"state": state,
-				})
-			elif int(previous["state"]) != state:
-				_agent_record_event("object_changed", "The %s at %s changed state from %d to %d." % [kind, _agent_point_text(object_position), int(previous["state"]), state], object_position, {
-					"id": id,
-					"kind": kind,
-					"position": _agent_point(object_position),
-					"old_state": int(previous["state"]),
-					"state": state,
-				})
-		agent_object_state[id] = object_state
-		object.position = object_position
-		object.set_meta("kind", kind)
-		object.set_meta("text", str(row.get("text", "")))
-		object.set_meta("state", state)
-		object.z_index = int(object.position.y) - 1
-		object.queue_redraw()
-
 	for row in client.world_tiles():
 		var id := int(row["id"])
 		seen_tiles[id] = true
 		var tile := _tile_for(id)
 		var tile_position := Vector2(float(row["x"]), float(row["y"]))
+		var kind := str(row["kind"])
+		var state := int(row.get("state", 0))
 		tile.position = tile_position
-		tile.set_meta("kind", str(row["kind"]))
+		tile.set_meta("kind", kind)
 		tile.set_meta("created_by", str(row.get("created_by", "")))
+		tile.set_meta("text", str(row.get("text", "")))
+		tile.set_meta("state", state)
+		tile.set_meta("asset_texture", _content_asset_texture(kind))
 		tile.z_index = int(tile.position.y) - 2
 		tile.queue_redraw()
-
-	for id in world_objects.keys():
-		if not seen_objects.has(id):
-			if record_events and agent_object_state.has(id):
-				var previous: Dictionary = agent_object_state[id]
-				var previous_position: Vector2 = previous["position"]
-				var previous_kind := str(previous["kind"])
-				_agent_record_event("object_removed", "The %s at %s disappeared." % [previous_kind, _agent_point_text(previous_position)], previous_position, {
-					"id": id,
-					"kind": previous_kind,
-					"last_position": _agent_point(previous_position),
-				})
-			agent_object_state.erase(id)
-			world_objects[id].queue_free()
-			world_objects.erase(id)
 
 	for id in world_tiles.keys():
 		if not seen_tiles.has(id):
@@ -728,14 +727,17 @@ func _draw() -> void:
 	var bg := Color(0.08, 0.09, 0.11, 0.95)
 	draw_rect(pane_rect, bg, true)
 	draw_rect(pane_rect, Color(0.95, 0.92, 0.80, 0.35), false, 2.0)
-	if library_category == "tile":
-		var tile_color := _tile_preview_color(kind)
-		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), tile_color)
-		draw_rect(Rect2(center - Vector2(112, 112), Vector2(224, 224)), Color(0.95, 0.92, 0.80), false, 4.0)
-		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
-	else:
-		_draw_library_object_preview(kind, center)
-		draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), kind.capitalize(), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
+	var texture := _content_asset_preview_texture(kind)
+	if texture != null:
+		var tex_size := Vector2(texture.get_width(), texture.get_height())
+		var scale := minf(192.0 / maxf(tex_size.x, 1.0), 192.0 / maxf(tex_size.y, 1.0))
+		var draw_size := tex_size * scale
+		draw_texture_rect(texture, Rect2(center - draw_size * 0.5, draw_size), false)
+	if library_category == "object" and kind == "button":
+		var overlay_color := Color(0.22, 0.78, 0.36, 0.25) if bool(entry.get("button_pressed", false)) else Color(0.92, 0.28, 0.20, 0.12)
+		draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), overlay_color, true)
+	draw_rect(Rect2(center - Vector2(64, 64), Vector2(128, 128)), Color(0.95, 0.92, 0.80), false, 4.0)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-54, 96), str(entry["name"]), HORIZONTAL_ALIGNMENT_LEFT, 180, 18, Color(0.96, 0.93, 0.81))
 
 func _update_chat() -> void:
 	latest_chat_by_sender.clear()
@@ -757,15 +759,6 @@ func _avatar_for(identity: String) -> Node2D:
 	world.add_child(avatar)
 	avatars[identity] = avatar
 	return avatar
-
-func _object_for(id: int) -> Node2D:
-	if world_objects.has(id):
-		return world_objects[id]
-
-	var object := WorldObjectNode.new()
-	world.add_child(object)
-	world_objects[id] = object
-	return object
 
 func _tile_for(id: int) -> Node2D:
 	if world_tiles.has(id):
@@ -1205,8 +1198,6 @@ func _agent_place(body: String, query: Dictionary) -> Dictionary:
 	var sent: bool = false
 	if layer == "tile":
 		sent = client.place_tile(kind, int(target["x"]), int(target["y"]))
-	else:
-		sent = client.place_object(kind, int(target["x"]), int(target["y"]))
 	_agent_settle_after_action()
 	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
 	result["ok"] = sent
@@ -1356,8 +1347,8 @@ func _agent_visible_plots(view_rect: Rect2) -> Array:
 
 func _agent_visible_objects(view_rect: Rect2, local_position: Vector2) -> Dictionary:
 	var objects := []
-	for id in world_objects.keys():
-		var object: Node2D = world_objects[id]
+	for id in world_tiles.keys():
+		var object: Node2D = world_tiles[id]
 		if not view_rect.has_point(object.position):
 			continue
 		var kind := str(object.get_meta("kind", "object"))
@@ -1798,7 +1789,7 @@ func _run_smoke_actions() -> void:
 		if avatars.has(local_identity):
 			var avatar: AvatarNode = avatars[local_identity]
 			smoke_target = avatar.world_target
-		client.place_object(smoke_object_kind, int(smoke_target.x), int(smoke_target.y))
+		client.place_tile(smoke_object_kind, int(smoke_target.x), int(smoke_target.y))
 	elif frame == SMOKE_INTERACT_FRAME:
 		client.interact_near()
 
@@ -1868,55 +1859,15 @@ class AvatarNode:
 				draw_rect(Rect2(rect.position + Vector2(rect.size.x - 2, 0), Vector2(2, rect.size.y)), trim)
 				draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 13), preview, HORIZONTAL_ALIGNMENT_LEFT, width - 12, 11, text)
 
-class WorldObjectNode:
-	extends Node2D
-
-	func _draw() -> void:
-		var kind: String = str(get_meta("kind", "flower"))
-		var state: int = int(get_meta("state", 0))
-		match kind:
-			"button":
-				_draw_button(state)
-			"rock":
-				_draw_rock()
-			"sign":
-				_draw_sign()
-			_:
-				_draw_flower()
-
-	func _draw_button(state: int) -> void:
-		var top: Color = Color(0.92, 0.28, 0.20) if state == 0 else Color(0.26, 0.70, 0.35)
-		draw_rect(Rect2(Vector2(-10, 6), Vector2(20, 4)), Color(0.16, 0.12, 0.10, 0.35))
-		draw_rect(Rect2(Vector2(-8, -4), Vector2(16, 10)), Color(0.38, 0.28, 0.20))
-		draw_rect(Rect2(Vector2(-6, -8), Vector2(12, 8)), top)
-		draw_rect(Rect2(Vector2(-6, -8), Vector2(12, 2)), Color(1.0, 0.88, 0.70, 0.45))
-
-	func _draw_flower() -> void:
-		draw_rect(Rect2(Vector2(-2, -2), Vector2(4, 12)), Color(0.16, 0.45, 0.18))
-		draw_rect(Rect2(Vector2(-8, -10), Vector2(6, 6)), Color(0.98, 0.82, 0.26))
-		draw_rect(Rect2(Vector2(2, -10), Vector2(6, 6)), Color(0.98, 0.54, 0.66))
-		draw_rect(Rect2(Vector2(-3, -15), Vector2(6, 6)), Color(0.98, 0.72, 0.28))
-		draw_rect(Rect2(Vector2(-3, -8), Vector2(6, 6)), Color(0.40, 0.22, 0.10))
-
-	func _draw_rock() -> void:
-		draw_rect(Rect2(Vector2(-10, 5), Vector2(20, 4)), Color(0.12, 0.13, 0.12, 0.30))
-		draw_rect(Rect2(Vector2(-9, -8), Vector2(18, 14)), Color(0.42, 0.45, 0.43))
-		draw_rect(Rect2(Vector2(-5, -12), Vector2(11, 6)), Color(0.55, 0.59, 0.56))
-		draw_rect(Rect2(Vector2(-7, -6), Vector2(4, 3)), Color(0.70, 0.73, 0.70, 0.50))
-
-	func _draw_sign() -> void:
-		draw_rect(Rect2(Vector2(-3, -2), Vector2(6, 16)), Color(0.36, 0.20, 0.10))
-		draw_rect(Rect2(Vector2(-18, -20), Vector2(36, 18)), Color(0.62, 0.40, 0.20))
-		draw_rect(Rect2(Vector2(-15, -17), Vector2(30, 12)), Color(0.78, 0.55, 0.30))
-		draw_rect(Rect2(Vector2(-11, -13), Vector2(22, 2)), Color(0.36, 0.20, 0.10, 0.55))
-		var text: String = str(get_meta("text", ""))
-		if not text.is_empty():
-			draw_string(ThemeDB.fallback_font, Vector2(-13, -7), text.substr(0, 10), HORIZONTAL_ALIGNMENT_LEFT, 26, 8, Color(0.20, 0.14, 0.07))
-
 class WorldTileNode:
 	extends Node2D
 
 	func _draw() -> void:
+		var texture: Texture2D = get_meta("asset_texture", null)
+		if texture != null:
+			var size := Vector2(texture.get_width(), texture.get_height())
+			draw_texture_rect(texture, Rect2(-size * 0.5, size), false)
+			return
 		var kind: String = str(get_meta("kind", "grass"))
 		match kind:
 			"path":

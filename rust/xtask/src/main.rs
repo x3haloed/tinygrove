@@ -120,6 +120,7 @@ fn db_publish() -> Result<(), String> {
             "local",
             "--module-path",
             "rust/server",
+            "--delete-data=always",
             "--yes",
         ],
         repo_dir(),

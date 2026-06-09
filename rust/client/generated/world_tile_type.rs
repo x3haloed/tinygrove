@@ -9,6 +9,8 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub struct WorldTile {
     pub id: u64,
     pub kind: String,
+    pub text: String,
+    pub state: i32,
     pub x: i32,
     pub y: i32,
     pub created_by: __sdk::Identity,
@@ -26,6 +28,8 @@ impl __sdk::InModule for WorldTile {
 pub struct WorldTileCols {
     pub id: __sdk::__query_builder::Col<WorldTile, u64>,
     pub kind: __sdk::__query_builder::Col<WorldTile, String>,
+    pub text: __sdk::__query_builder::Col<WorldTile, String>,
+    pub state: __sdk::__query_builder::Col<WorldTile, i32>,
     pub x: __sdk::__query_builder::Col<WorldTile, i32>,
     pub y: __sdk::__query_builder::Col<WorldTile, i32>,
     pub created_by: __sdk::__query_builder::Col<WorldTile, __sdk::Identity>,
@@ -39,6 +43,8 @@ impl __sdk::__query_builder::HasCols for WorldTile {
         WorldTileCols {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             kind: __sdk::__query_builder::Col::new(table_name, "kind"),
+            text: __sdk::__query_builder::Col::new(table_name, "text"),
+            state: __sdk::__query_builder::Col::new(table_name, "state"),
             x: __sdk::__query_builder::Col::new(table_name, "x"),
             y: __sdk::__query_builder::Col::new(table_name, "y"),
             created_by: __sdk::__query_builder::Col::new(table_name, "created_by"),

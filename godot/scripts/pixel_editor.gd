@@ -182,18 +182,14 @@ func _on_save_pressed() -> void:
 	var is_tile := kind_button.selected == TILE_KIND_INDEX
 	var kind_name := "tile" if is_tile else "decoration"
 	var placement_variant := TILE_PLACEMENT_FULL
-	var footprint := TILE_FOOTPRINT
 	if not is_tile:
 		match placement_variant_button.selected:
 			1:
 				placement_variant = DECORATION_PLACEMENT_HALF
-				footprint = DECORATION_HALF_WIDTH_FOOTPRINT
 			2:
 				placement_variant = DECORATION_PLACEMENT_QUARTER
-				footprint = DECORATION_QUARTER_FOOTPRINT
 			_:
 				placement_variant = DECORATION_PLACEMENT_FULL
-				footprint = DECORATION_FULL_FOOTPRINT
 	
 	var data := {
 		"name": name_edit.text,

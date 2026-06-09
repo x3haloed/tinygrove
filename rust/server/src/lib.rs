@@ -1,3 +1,4 @@
+use base64::Engine;
 use spacetimedb::{Identity, ReducerContext, Table, Timestamp, reducer, table};
 
 const SUPPORTED_CLIENT_PROTOCOL: u32 = 1;
@@ -8,8 +9,6 @@ const PLOT_GAP: i32 = MOVE_STEP * 4;
 const PLOT_COLUMNS: i32 = 4;
 const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
-const MAX_OBJECT_KIND_CHARS: usize = 24;
-const MAX_TILE_KIND_CHARS: usize = 24;
 const MAX_ASSET_NAME_CHARS: usize = 32;
 const MAX_ASSET_SLUG_CHARS: usize = 32;
 const MAX_ASSET_STATUS_CHARS: usize = 16;
@@ -75,27 +74,14 @@ pub struct ChatMessage {
     pub sent_at: Timestamp,
 }
 
-#[table(accessor = world_object, public)]
-pub struct WorldObject {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub kind: String,
-    pub text: String,
-    pub x: i32,
-    pub y: i32,
-    pub state: i32,
-    pub created_by: Identity,
-    pub created_at: Timestamp,
-    pub updated_at: Timestamp,
-}
-
 #[table(accessor = world_tile, public)]
 pub struct WorldTile {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
     pub kind: String,
+    pub text: String,
+    pub state: i32,
     pub x: i32,
     pub y: i32,
     pub created_by: Identity,
@@ -137,8 +123,13 @@ pub fn init(ctx: &ReducerContext) {
         "supported_client_protocol",
         SUPPORTED_CLIENT_PROTOCOL.to_string(),
     );
-    seed_world_objects(ctx);
     seed_content_assets(ctx);
+}
+
+#[reducer]
+pub fn repair_content_assets(ctx: &ReducerContext) -> Result<(), String> {
+    seed_content_assets(ctx);
+    Ok(())
 }
 
 #[reducer(client_connected)]
@@ -150,6 +141,7 @@ pub fn client_connected(ctx: &ReducerContext) {
             ..player
         });
     }
+    seed_content_assets(ctx);
 }
 
 #[reducer(client_disconnected)]
@@ -262,54 +254,6 @@ pub fn send_chat(ctx: &ReducerContext, body: String) -> Result<(), String> {
 }
 
 #[reducer]
-pub fn place_object(
-    ctx: &ReducerContext,
-    kind: String,
-    target_x: i32,
-    target_y: i32,
-) -> Result<(), String> {
-    require_joined(ctx)?;
-
-    let kind = clean_object_kind(kind)?;
-    let position = require_position(ctx)?;
-    let target = (target_x, target_y);
-    let plot = require_plot(ctx)?;
-
-    if !within_place_radius(&position, target.0, target.1) {
-        return Err(format!(
-            "You can only place within {MAX_PLACE_RADIUS} world units of your current position"
-        ));
-    }
-
-    if !plot_contains(&plot, target.0, target.1) {
-        return Err("You can only place objects inside your plot".to_string());
-    }
-
-    if ctx
-        .db
-        .world_object()
-        .iter()
-        .any(|object| object.x == target.0 && object.y == target.1)
-    {
-        return Err("There is already something there".to_string());
-    }
-
-    ctx.db.world_object().insert(WorldObject {
-        id: 0,
-        kind,
-        text: String::new(),
-        x: target.0,
-        y: target.1,
-        state: 0,
-        created_by: ctx.sender(),
-        created_at: ctx.timestamp,
-        updated_at: ctx.timestamp,
-    });
-
-    Ok(())
-}
-
-#[reducer]
 pub fn place_tile(
     ctx: &ReducerContext,
     kind: String,
@@ -318,7 +262,7 @@ pub fn place_tile(
 ) -> Result<(), String> {
     require_joined(ctx)?;
 
-    let kind = clean_tile_kind(kind)?;
+    let kind = clean_asset_slug(kind)?;
     let position = require_position(ctx)?;
     let target = (target_x, target_y);
     let plot = require_plot(ctx)?;
@@ -333,18 +277,15 @@ pub fn place_tile(
         return Err("You can only place tiles inside your plot".to_string());
     }
 
-    if ctx
-        .db
-        .world_tile()
-        .iter()
-        .any(|tile| tile.x == target.0 && tile.y == target.1)
-    {
+    if ctx.db.world_tile().iter().any(|tile| tile.x == target.0 && tile.y == target.1) {
         return Err("There is already a tile there".to_string());
     }
 
     ctx.db.world_tile().insert(WorldTile {
         id: 0,
         kind,
+        text: String::new(),
+        state: 0,
         x: target.0,
         y: target.1,
         created_by: ctx.sender(),
@@ -539,7 +480,7 @@ pub fn interact_near(ctx: &ReducerContext) -> Result<(), String> {
     let target = interaction_target(&position);
     let object = ctx
         .db
-        .world_object()
+        .world_tile()
         .iter()
         .filter(|object| {
             (object.x - target.0).abs() <= INTERACTION_REACH
@@ -550,7 +491,7 @@ pub fn interact_near(ctx: &ReducerContext) -> Result<(), String> {
 
     match object.kind.as_str() {
         "button" => {
-            ctx.db.world_object().id().update(WorldObject {
+            ctx.db.world_tile().id().update(WorldTile {
                 state: if object.state == 0 { 1 } else { 0 },
                 updated_at: ctx.timestamp,
                 ..object
@@ -676,45 +617,20 @@ fn upsert_server_config(ctx: &ReducerContext, key: &str, value: String) {
     }
 }
 
-fn seed_world_objects(ctx: &ReducerContext) {
-    if ctx.db.world_object().iter().next().is_some() {
-        return;
-    }
-
-    for (kind, x, y, state) in [
-        ("sign", 0, -32, 0),
-        ("button", 48, 0, 0),
-        ("flower", -48, 32, 0),
-        ("rock", 96, -32, 0),
-    ] {
-        ctx.db.world_object().insert(WorldObject {
-            id: 0,
-            kind: kind.to_string(),
-            text: String::new(),
-            x,
-            y,
-            state,
-            created_by: ctx.sender(),
-            created_at: ctx.timestamp,
-            updated_at: ctx.timestamp,
-        });
-    }
-}
-
 fn seed_content_assets(ctx: &ReducerContext) {
     if ctx.db.content_asset().iter().next().is_some() {
         return;
     }
 
-    for (asset_kind, name, slug, status, grid_divisor, placement_variant, collidable, transparent_allowed) in [
-        ("tile", "Grass", "grass", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
-        ("tile", "Path", "path", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
-        ("tile", "Water", "water", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
-        ("tile", "Dirt", "dirt", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false),
-        ("decoration", "Flower", "flower", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_QUARTER, false, true),
-        ("decoration", "Button", "button", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_HALF, true, true),
-        ("decoration", "Sign", "sign", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true),
-        ("decoration", "Rock", "rock", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true),
+    for (asset_kind, name, slug, status, grid_divisor, placement_variant, collidable, transparent_allowed, render_bytes) in [
+        ("tile", "Grass", "grass", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false, asset_png_base64("grass")),
+        ("tile", "Path", "path", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false, asset_png_base64("path")),
+        ("tile", "Water", "water", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false, asset_png_base64("water")),
+        ("tile", "Dirt", "dirt", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, false, asset_png_base64("dirt")),
+        ("decoration", "Flower", "flower", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_QUARTER, false, true, asset_png_base64("flower")),
+        ("decoration", "Button", "button", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_HALF, true, true, asset_png_base64("button")),
+        ("decoration", "Sign", "sign", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true, asset_png_base64("sign")),
+        ("decoration", "Rock", "rock", "published", TILE_GRID_DIVISOR, DECORATION_PLACEMENT_FULL, true, true, asset_png_base64("rock")),
     ] {
         let (placement_w, placement_h, collidable, transparent_allowed) = normalize_asset_shape(
             asset_kind,
@@ -738,15 +654,30 @@ fn seed_content_assets(ctx: &ReducerContext) {
             collidable,
             transparent_allowed,
             render_format: "png".to_string(),
-            render_bytes: String::new(),
+            render_bytes,
             collision_format: "mask1".to_string(),
             collision_bytes: String::new(),
             preview_format: "png".to_string(),
-            preview_bytes: String::new(),
+            preview_bytes: asset_png_base64(slug),
             created_at: ctx.timestamp,
             updated_at: ctx.timestamp,
         });
     }
+}
+
+fn asset_png_base64(name: &str) -> String {
+    let bytes = match name {
+        "grass" => include_bytes!("../assets/content_assets/grass.png").as_slice(),
+        "path" => include_bytes!("../assets/content_assets/path.png").as_slice(),
+        "water" => include_bytes!("../assets/content_assets/water.png").as_slice(),
+        "dirt" => include_bytes!("../assets/content_assets/dirt.png").as_slice(),
+        "flower" => include_bytes!("../assets/content_assets/flower.png").as_slice(),
+        "button" => include_bytes!("../assets/content_assets/button.png").as_slice(),
+        "sign" => include_bytes!("../assets/content_assets/sign.png").as_slice(),
+        "rock" => include_bytes!("../assets/content_assets/rock.png").as_slice(),
+        _ => &[],
+    };
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 fn clean_display_name(display_name: String) -> Result<String, String> {
@@ -773,22 +704,6 @@ fn clean_chat_body(body: String) -> Result<String, String> {
         ));
     }
     Ok(body.to_string())
-}
-
-fn clean_object_kind(kind: String) -> Result<String, String> {
-    let kind = kind.trim().to_lowercase();
-    if kind.is_empty() {
-        return Err("Object kind cannot be empty".to_string());
-    }
-    if kind.chars().count() > MAX_OBJECT_KIND_CHARS {
-        return Err(format!(
-            "Object kind must be {MAX_OBJECT_KIND_CHARS} characters or fewer"
-        ));
-    }
-    match kind.as_str() {
-        "button" | "flower" | "rock" | "sign" => Ok(kind),
-        _ => Err("Object kind must be button, flower, rock, or sign".to_string()),
-    }
 }
 
 fn clean_asset_kind(kind: String) -> Result<String, String> {
@@ -858,20 +773,4 @@ fn clean_asset_data(data: String) -> Result<String, String> {
         ));
     }
     Ok(data)
-}
-
-fn clean_tile_kind(kind: String) -> Result<String, String> {
-    let kind = kind.trim().to_lowercase();
-    if kind.is_empty() {
-        return Err("Tile kind cannot be empty".to_string());
-    }
-    if kind.chars().count() > MAX_TILE_KIND_CHARS {
-        return Err(format!(
-            "Tile kind must be {MAX_TILE_KIND_CHARS} characters or fewer"
-        ));
-    }
-    match kind.as_str() {
-        "grass" | "path" | "water" | "dirt" => Ok(kind),
-        _ => Err("Tile kind must be grass, path, water, or dirt".to_string()),
-    }
 }

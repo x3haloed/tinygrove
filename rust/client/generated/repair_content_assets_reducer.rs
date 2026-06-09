@@ -6,52 +6,41 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct PlaceObjectArgs {
-    pub kind: String,
-    pub target_x: i32,
-    pub target_y: i32,
-}
+pub(super) struct RepairContentAssetsArgs {}
 
-impl From<PlaceObjectArgs> for super::Reducer {
-    fn from(args: PlaceObjectArgs) -> Self {
-        Self::PlaceObject {
-            kind: args.kind,
-            target_x: args.target_x,
-            target_y: args.target_y,
-        }
+impl From<RepairContentAssetsArgs> for super::Reducer {
+    fn from(args: RepairContentAssetsArgs) -> Self {
+        Self::RepairContentAssets
     }
 }
 
-impl __sdk::InModule for PlaceObjectArgs {
+impl __sdk::InModule for RepairContentAssetsArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `place_object`.
+/// Extension trait for access to the reducer `repair_content_assets`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait place_object {
-    /// Request that the remote module invoke the reducer `place_object` to run as soon as possible.
+pub trait repair_content_assets {
+    /// Request that the remote module invoke the reducer `repair_content_assets` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`place_object:place_object_then`] to run a callback after the reducer completes.
-    fn place_object(&self, kind: String, target_x: i32, target_y: i32) -> __sdk::Result<()> {
-        self.place_object_then(kind, target_x, target_y, |_, _| {})
+    /// /// Use [`repair_content_assets:repair_content_assets_then`] to run a callback after the reducer completes.
+    fn repair_content_assets(&self) -> __sdk::Result<()> {
+        self.repair_content_assets_then(|_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `place_object` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `repair_content_assets` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn place_object_then(
+    fn repair_content_assets_then(
         &self,
-        kind: String,
-        target_x: i32,
-        target_y: i32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -59,24 +48,15 @@ pub trait place_object {
     ) -> __sdk::Result<()>;
 }
 
-impl place_object for super::RemoteReducers {
-    fn place_object_then(
+impl repair_content_assets for super::RemoteReducers {
+    fn repair_content_assets_then(
         &self,
-        kind: String,
-        target_x: i32,
-        target_y: i32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp.invoke_reducer_with_callback(
-            PlaceObjectArgs {
-                kind,
-                target_x,
-                target_y,
-            },
-            callback,
-        )
+        self.imp
+            .invoke_reducer_with_callback(RepairContentAssetsArgs {}, callback)
     }
 }

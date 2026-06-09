@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use generated::{
     ChatMessage, ChatMessageTableAccess, ContentAsset, ContentAssetTableAccess, DbConnection,
     Player, PlayerPlot, PlayerPlotTableAccess, PlayerPosition, PlayerPositionTableAccess,
-    PlayerTableAccess, WorldObject, WorldObjectTableAccess, WorldTile, WorldTileTableAccess,
-    interact_near, join_game, move_player, place_object, place_tile, send_chat,
+    PlayerTableAccess, WorldTile, WorldTileTableAccess, interact_near, join_game, move_player,
+    place_tile, send_chat,
 };
 use generated::create_content_asset_reducer::create_content_asset;
 use generated::update_content_asset_reducer::update_content_asset;
@@ -127,7 +127,7 @@ impl TinyGroveClient {
                     "SELECT * FROM player_position",
                     "SELECT * FROM chat_message",
                     "SELECT * FROM content_asset",
-                    "SELECT * FROM world_object",
+                    "SELECT * FROM world_tile",
                 ]);
             })
             .build();
@@ -217,25 +217,6 @@ impl TinyGroveClient {
         };
 
         match connection.reducers.send_chat(body.to_string()) {
-            Ok(()) => true,
-            Err(error) => {
-                self.last_error = error.to_string();
-                false
-            }
-        }
-    }
-
-    #[func]
-    pub fn place_object(&mut self, kind: GString, target_x: i64, target_y: i64) -> bool {
-        let Some(connection) = self.connection.as_ref() else {
-            self.last_error = "Not connected".to_string();
-            return false;
-        };
-
-        match connection
-            .reducers
-            .place_object(kind.to_string(), target_x as i32, target_y as i32)
-        {
             Ok(()) => true,
             Err(error) => {
                 self.last_error = error.to_string();
@@ -463,23 +444,6 @@ impl TinyGroveClient {
     }
 
     #[func]
-    pub fn world_objects(&self) -> Array<Dictionary<Variant, Variant>> {
-        let mut rows = Array::new();
-        let Some(connection) = self.connection.as_ref() else {
-            return rows;
-        };
-
-        let mut objects = connection.db.world_object().iter().collect::<Vec<_>>();
-        objects.sort_by_key(|object| object.id);
-
-        for object in objects {
-            rows.push(&world_object_dictionary(&object));
-        }
-
-        rows
-    }
-
-    #[func]
     pub fn world_tiles(&self) -> Array<Dictionary<Variant, Variant>> {
         let mut rows = Array::new();
         let Some(connection) = self.connection.as_ref() else {
@@ -654,30 +618,12 @@ fn chat_dictionary(message: &ChatMessage, player: Option<&Player>) -> Dictionary
     dict
 }
 
-fn world_object_dictionary(object: &WorldObject) -> Dictionary<Variant, Variant> {
-    let mut dict = Dictionary::new();
-    dict.set("id", object.id as i64);
-    dict.set("kind", object.kind.clone());
-    dict.set("text", object.text.clone());
-    dict.set("x", object.x);
-    dict.set("y", object.y);
-    dict.set("state", object.state);
-    dict.set("created_by", identity_key(&object.created_by));
-    dict.set(
-        "created_at_micros",
-        object.created_at.to_micros_since_unix_epoch(),
-    );
-    dict.set(
-        "updated_at_micros",
-        object.updated_at.to_micros_since_unix_epoch(),
-    );
-    dict
-}
-
 fn world_tile_dictionary(tile: &WorldTile) -> Dictionary<Variant, Variant> {
     let mut dict = Dictionary::new();
     dict.set("id", tile.id as i64);
     dict.set("kind", tile.kind.clone());
+    dict.set("text", tile.text.clone());
+    dict.set("state", tile.state);
     dict.set("x", tile.x);
     dict.set("y", tile.y);
     dict.set("created_by", identity_key(&tile.created_by));
