@@ -92,6 +92,9 @@ placeholder_text = "Slug (e.g. tree_1)"
 [node name="KindButton" type="OptionButton" parent="Root/PropsPanel" unique_id=1552318319]
 layout_mode = 2
 
+[node name="PlacementVariantButton" type="OptionButton" parent="Root/PropsPanel" unique_id=1061964197]
+layout_mode = 2
+
 [node name="GridDivisor" type="SpinBox" parent="Root/PropsPanel" unique_id=146164849]
 layout_mode = 2
 min_value = 1.0
@@ -104,12 +107,14 @@ layout_mode = 2
 min_value = 1.0
 value = 1.0
 prefix = "W:"
+visible = false
 
 [node name="PlacementH" type="SpinBox" parent="Root/PropsPanel" unique_id=1260977223]
 layout_mode = 2
 min_value = 1.0
 value = 1.0
 prefix = "H:"
+visible = false
 
 [node name="CollidableCheck" type="CheckButton" parent="Root/PropsPanel" unique_id=1372362989]
 layout_mode = 2
