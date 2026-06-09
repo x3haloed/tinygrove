@@ -10,6 +10,11 @@ const MAX_DISPLAY_NAME_CHARS: usize = 24;
 const MAX_CHAT_BODY_CHARS: usize = 240;
 const MAX_OBJECT_KIND_CHARS: usize = 24;
 const MAX_TILE_KIND_CHARS: usize = 24;
+const MAX_ASSET_NAME_CHARS: usize = 32;
+const MAX_ASSET_SLUG_CHARS: usize = 32;
+const MAX_ASSET_STATUS_CHARS: usize = 16;
+const MAX_ASSET_FORMAT_CHARS: usize = 16;
+const MAX_ASSET_DATA_CHARS: usize = 262_144;
 const MAX_PLACE_RADIUS: i32 = MOVE_STEP * 8;
 
 #[table(accessor = server_config, public)]
@@ -92,6 +97,33 @@ pub struct WorldTile {
     pub updated_at: Timestamp,
 }
 
+#[table(accessor = content_asset, public)]
+pub struct ContentAsset {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub owner: Identity,
+    pub asset_kind: String,
+    pub name: String,
+    pub slug: String,
+    pub status: String,
+    pub grid_divisor: i32,
+    pub placement_w: i32,
+    pub placement_h: i32,
+    pub anchor_x: i32,
+    pub anchor_y: i32,
+    pub collidable: bool,
+    pub transparent_allowed: bool,
+    pub render_format: String,
+    pub render_bytes: String,
+    pub collision_format: String,
+    pub collision_bytes: String,
+    pub preview_format: String,
+    pub preview_bytes: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
     upsert_server_config(
@@ -100,6 +132,7 @@ pub fn init(ctx: &ReducerContext) {
         SUPPORTED_CLIENT_PROTOCOL.to_string(),
     );
     seed_world_objects(ctx);
+    seed_content_assets(ctx);
 }
 
 #[reducer(client_connected)]
@@ -317,6 +350,144 @@ pub fn place_tile(
 }
 
 #[reducer]
+pub fn create_content_asset(
+    ctx: &ReducerContext,
+    asset_kind: String,
+    name: String,
+    slug: String,
+    status: String,
+    grid_divisor: i32,
+    placement_w: i32,
+    placement_h: i32,
+    anchor_x: i32,
+    anchor_y: i32,
+    collidable: bool,
+    transparent_allowed: bool,
+    render_format: String,
+    render_bytes: String,
+    collision_format: String,
+    collision_bytes: String,
+    preview_format: String,
+    preview_bytes: String,
+) -> Result<(), String> {
+    require_joined(ctx)?;
+
+    let asset_kind = clean_asset_kind(asset_kind)?;
+    let name = clean_asset_name(name)?;
+    let slug = clean_asset_slug(slug)?;
+    let status = clean_asset_status(status)?;
+    let render_format = clean_asset_format(render_format)?;
+    let collision_format = clean_asset_format(collision_format)?;
+    let preview_format = clean_asset_format(preview_format)?;
+    let render_bytes = clean_asset_data(render_bytes)?;
+    let collision_bytes = clean_asset_data(collision_bytes)?;
+    let preview_bytes = clean_asset_data(preview_bytes)?;
+
+    if grid_divisor <= 0 {
+        return Err("Grid divisor must be positive".to_string());
+    }
+    if placement_w <= 0 || placement_h <= 0 {
+        return Err("Placement footprint must be positive".to_string());
+    }
+
+    ctx.db.content_asset().insert(ContentAsset {
+        id: 0,
+        owner: ctx.sender(),
+        asset_kind,
+        name,
+        slug,
+        status,
+        grid_divisor,
+        placement_w,
+        placement_h,
+        anchor_x,
+        anchor_y,
+        collidable,
+        transparent_allowed,
+        render_format,
+        render_bytes,
+        collision_format,
+        collision_bytes,
+        preview_format,
+        preview_bytes,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+    });
+
+    Ok(())
+}
+
+#[reducer]
+pub fn update_content_asset(
+    ctx: &ReducerContext,
+    asset_id: u64,
+    name: String,
+    slug: String,
+    status: String,
+    grid_divisor: i32,
+    placement_w: i32,
+    placement_h: i32,
+    anchor_x: i32,
+    anchor_y: i32,
+    collidable: bool,
+    transparent_allowed: bool,
+    render_format: String,
+    render_bytes: String,
+    collision_format: String,
+    collision_bytes: String,
+    preview_format: String,
+    preview_bytes: String,
+) -> Result<(), String> {
+    require_joined(ctx)?;
+
+    let existing = ctx
+        .db
+        .content_asset()
+        .id()
+        .find(&asset_id)
+        .ok_or_else(|| "Content asset not found".to_string())?;
+    if existing.owner != ctx.sender() {
+        return Err("You can only edit your own content assets".to_string());
+    }
+
+    let name = clean_asset_name(name)?;
+    let slug = clean_asset_slug(slug)?;
+    let status = clean_asset_status(status)?;
+    let render_format = clean_asset_format(render_format)?;
+    let collision_format = clean_asset_format(collision_format)?;
+    let preview_format = clean_asset_format(preview_format)?;
+    let render_bytes = clean_asset_data(render_bytes)?;
+    let collision_bytes = clean_asset_data(collision_bytes)?;
+    let preview_bytes = clean_asset_data(preview_bytes)?;
+
+    ctx.db.content_asset().id().update(ContentAsset {
+        id: asset_id,
+        owner: existing.owner,
+        name,
+        slug,
+        status,
+        asset_kind: existing.asset_kind,
+        grid_divisor,
+        placement_w,
+        placement_h,
+        anchor_x,
+        anchor_y,
+        collidable,
+        transparent_allowed,
+        render_format,
+        render_bytes,
+        collision_format,
+        collision_bytes,
+        preview_format,
+        preview_bytes,
+        created_at: existing.created_at,
+        updated_at: ctx.timestamp,
+    });
+
+    Ok(())
+}
+
+#[reducer]
 pub fn interact_near(ctx: &ReducerContext) -> Result<(), String> {
     let player = require_joined(ctx)?;
     let position = require_position(ctx)?;
@@ -485,6 +656,47 @@ fn seed_world_objects(ctx: &ReducerContext) {
     }
 }
 
+fn seed_content_assets(ctx: &ReducerContext) {
+    if ctx.db.content_asset().iter().next().is_some() {
+        return;
+    }
+
+    for (asset_kind, name, slug, status, grid_divisor, placement_w, placement_h, collidable, transparent_allowed) in [
+        ("tile", "Grass", "grass", "published", 4, 1, 1, true, false),
+        ("tile", "Path", "path", "published", 4, 1, 1, true, false),
+        ("tile", "Water", "water", "published", 4, 1, 1, true, false),
+        ("tile", "Dirt", "dirt", "published", 4, 1, 1, true, false),
+        ("decoration", "Flower", "flower", "published", 4, 1, 1, false, true),
+        ("decoration", "Button", "button", "published", 4, 1, 1, true, true),
+        ("decoration", "Sign", "sign", "published", 4, 1, 1, true, true),
+        ("decoration", "Rock", "rock", "published", 4, 1, 1, true, true),
+    ] {
+        ctx.db.content_asset().insert(ContentAsset {
+            id: 0,
+            owner: ctx.sender(),
+            asset_kind: asset_kind.to_string(),
+            name: name.to_string(),
+            slug: slug.to_string(),
+            status: status.to_string(),
+            grid_divisor,
+            placement_w,
+            placement_h,
+            anchor_x: 0,
+            anchor_y: 0,
+            collidable,
+            transparent_allowed,
+            render_format: "png".to_string(),
+            render_bytes: String::new(),
+            collision_format: "mask1".to_string(),
+            collision_bytes: String::new(),
+            preview_format: "png".to_string(),
+            preview_bytes: String::new(),
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+        });
+    }
+}
+
 fn clean_display_name(display_name: String) -> Result<String, String> {
     let name = display_name.trim();
     if name.is_empty() {
@@ -525,6 +737,75 @@ fn clean_object_kind(kind: String) -> Result<String, String> {
         "button" | "flower" | "rock" | "sign" => Ok(kind),
         _ => Err("Object kind must be button, flower, rock, or sign".to_string()),
     }
+}
+
+fn clean_asset_kind(kind: String) -> Result<String, String> {
+    let kind = kind.trim().to_lowercase();
+    match kind.as_str() {
+        "tile" | "decoration" => Ok(kind),
+        _ => Err("Asset kind must be tile or decoration".to_string()),
+    }
+}
+
+fn clean_asset_name(name: String) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Asset name cannot be empty".to_string());
+    }
+    if name.chars().count() > MAX_ASSET_NAME_CHARS {
+        return Err(format!(
+            "Asset name must be {MAX_ASSET_NAME_CHARS} characters or fewer"
+        ));
+    }
+    Ok(name.to_string())
+}
+
+fn clean_asset_slug(slug: String) -> Result<String, String> {
+    let slug = slug.trim().to_lowercase();
+    if slug.is_empty() {
+        return Err("Asset slug cannot be empty".to_string());
+    }
+    if slug.chars().count() > MAX_ASSET_SLUG_CHARS {
+        return Err(format!(
+            "Asset slug must be {MAX_ASSET_SLUG_CHARS} characters or fewer"
+        ));
+    }
+    Ok(slug)
+}
+
+fn clean_asset_status(status: String) -> Result<String, String> {
+    let status = status.trim().to_lowercase();
+    if status.chars().count() > MAX_ASSET_STATUS_CHARS {
+        return Err(format!(
+            "Asset status must be {MAX_ASSET_STATUS_CHARS} characters or fewer"
+        ));
+    }
+    match status.as_str() {
+        "draft" | "published" | "archived" => Ok(status),
+        _ => Err("Asset status must be draft, published, or archived".to_string()),
+    }
+}
+
+fn clean_asset_format(format: String) -> Result<String, String> {
+    let format = format.trim().to_lowercase();
+    if format.is_empty() {
+        return Err("Asset format cannot be empty".to_string());
+    }
+    if format.chars().count() > MAX_ASSET_FORMAT_CHARS {
+        return Err(format!(
+            "Asset format must be {MAX_ASSET_FORMAT_CHARS} characters or fewer"
+        ));
+    }
+    Ok(format)
+}
+
+fn clean_asset_data(data: String) -> Result<String, String> {
+    if data.chars().count() > MAX_ASSET_DATA_CHARS {
+        return Err(format!(
+            "Asset data must be {MAX_ASSET_DATA_CHARS} characters or fewer"
+        ));
+    }
+    Ok(data)
 }
 
 fn clean_tile_kind(kind: String) -> Result<String, String> {

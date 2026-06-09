@@ -8,6 +8,9 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 pub mod chat_message_table;
 pub mod chat_message_type;
+pub mod content_asset_table;
+pub mod content_asset_type;
+pub mod create_content_asset_reducer;
 pub mod interact_near_reducer;
 pub mod join_game_reducer;
 pub mod move_player_reducer;
@@ -22,6 +25,7 @@ pub mod player_type;
 pub mod send_chat_reducer;
 pub mod server_config_table;
 pub mod server_config_type;
+pub mod update_content_asset_reducer;
 pub mod world_object_table;
 pub mod world_object_type;
 pub mod world_tile_table;
@@ -29,6 +33,9 @@ pub mod world_tile_type;
 
 pub use chat_message_table::*;
 pub use chat_message_type::ChatMessage;
+pub use content_asset_table::*;
+pub use content_asset_type::ContentAsset;
+pub use create_content_asset_reducer::create_content_asset;
 pub use interact_near_reducer::interact_near;
 pub use join_game_reducer::join_game;
 pub use move_player_reducer::move_player;
@@ -43,6 +50,7 @@ pub use player_type::Player;
 pub use send_chat_reducer::send_chat;
 pub use server_config_table::*;
 pub use server_config_type::ServerConfig;
+pub use update_content_asset_reducer::update_content_asset;
 pub use world_object_table::*;
 pub use world_object_type::WorldObject;
 pub use world_tile_table::*;
@@ -56,6 +64,25 @@ pub use world_tile_type::WorldTile;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
+    CreateContentAsset {
+        asset_kind: String,
+        name: String,
+        slug: String,
+        status: String,
+        grid_divisor: i32,
+        placement_w: i32,
+        placement_h: i32,
+        anchor_x: i32,
+        anchor_y: i32,
+        collidable: bool,
+        transparent_allowed: bool,
+        render_format: String,
+        render_bytes: String,
+        collision_format: String,
+        collision_bytes: String,
+        preview_format: String,
+        preview_bytes: String,
+    },
     InteractNear,
     JoinGame {
         display_name: String,
@@ -79,6 +106,25 @@ pub enum Reducer {
     SendChat {
         body: String,
     },
+    UpdateContentAsset {
+        asset_id: u64,
+        name: String,
+        slug: String,
+        status: String,
+        grid_divisor: i32,
+        placement_w: i32,
+        placement_h: i32,
+        anchor_x: i32,
+        anchor_y: i32,
+        collidable: bool,
+        transparent_allowed: bool,
+        render_format: String,
+        render_bytes: String,
+        collision_format: String,
+        collision_bytes: String,
+        preview_format: String,
+        preview_bytes: String,
+    },
 }
 
 impl __sdk::InModule for Reducer {
@@ -88,18 +134,57 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
+            Reducer::CreateContentAsset { .. } => "create_content_asset",
             Reducer::InteractNear => "interact_near",
             Reducer::JoinGame { .. } => "join_game",
             Reducer::MovePlayer { .. } => "move_player",
             Reducer::PlaceObject { .. } => "place_object",
             Reducer::PlaceTile { .. } => "place_tile",
             Reducer::SendChat { .. } => "send_chat",
+            Reducer::UpdateContentAsset { .. } => "update_content_asset",
             _ => unreachable!(),
         }
     }
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
+            Reducer::CreateContentAsset {
+                asset_kind,
+                name,
+                slug,
+                status,
+                grid_divisor,
+                placement_w,
+                placement_h,
+                anchor_x,
+                anchor_y,
+                collidable,
+                transparent_allowed,
+                render_format,
+                render_bytes,
+                collision_format,
+                collision_bytes,
+                preview_format,
+                preview_bytes,
+            } => __sats::bsatn::to_vec(&create_content_asset_reducer::CreateContentAssetArgs {
+                asset_kind: asset_kind.clone(),
+                name: name.clone(),
+                slug: slug.clone(),
+                status: status.clone(),
+                grid_divisor: grid_divisor.clone(),
+                placement_w: placement_w.clone(),
+                placement_h: placement_h.clone(),
+                anchor_x: anchor_x.clone(),
+                anchor_y: anchor_y.clone(),
+                collidable: collidable.clone(),
+                transparent_allowed: transparent_allowed.clone(),
+                render_format: render_format.clone(),
+                render_bytes: render_bytes.clone(),
+                collision_format: collision_format.clone(),
+                collision_bytes: collision_bytes.clone(),
+                preview_format: preview_format.clone(),
+                preview_bytes: preview_bytes.clone(),
+            }),
             Reducer::InteractNear => {
                 __sats::bsatn::to_vec(&interact_near_reducer::InteractNearArgs {})
             }
@@ -139,6 +224,43 @@ impl __sdk::Reducer for Reducer {
             Reducer::SendChat { body } => {
                 __sats::bsatn::to_vec(&send_chat_reducer::SendChatArgs { body: body.clone() })
             }
+            Reducer::UpdateContentAsset {
+                asset_id,
+                name,
+                slug,
+                status,
+                grid_divisor,
+                placement_w,
+                placement_h,
+                anchor_x,
+                anchor_y,
+                collidable,
+                transparent_allowed,
+                render_format,
+                render_bytes,
+                collision_format,
+                collision_bytes,
+                preview_format,
+                preview_bytes,
+            } => __sats::bsatn::to_vec(&update_content_asset_reducer::UpdateContentAssetArgs {
+                asset_id: asset_id.clone(),
+                name: name.clone(),
+                slug: slug.clone(),
+                status: status.clone(),
+                grid_divisor: grid_divisor.clone(),
+                placement_w: placement_w.clone(),
+                placement_h: placement_h.clone(),
+                anchor_x: anchor_x.clone(),
+                anchor_y: anchor_y.clone(),
+                collidable: collidable.clone(),
+                transparent_allowed: transparent_allowed.clone(),
+                render_format: render_format.clone(),
+                render_bytes: render_bytes.clone(),
+                collision_format: collision_format.clone(),
+                collision_bytes: collision_bytes.clone(),
+                preview_format: preview_format.clone(),
+                preview_bytes: preview_bytes.clone(),
+            }),
             _ => unreachable!(),
         }
     }
@@ -149,6 +271,7 @@ impl __sdk::Reducer for Reducer {
 #[doc(hidden)]
 pub struct DbUpdate {
     chat_message: __sdk::TableUpdate<ChatMessage>,
+    content_asset: __sdk::TableUpdate<ContentAsset>,
     player: __sdk::TableUpdate<Player>,
     player_plot: __sdk::TableUpdate<PlayerPlot>,
     player_position: __sdk::TableUpdate<PlayerPosition>,
@@ -166,6 +289,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "chat_message" => db_update
                     .chat_message
                     .append(chat_message_table::parse_table_update(table_update)?),
+                "content_asset" => db_update
+                    .content_asset
+                    .append(content_asset_table::parse_table_update(table_update)?),
                 "player" => db_update
                     .player
                     .append(player_table::parse_table_update(table_update)?),
@@ -213,6 +339,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.chat_message = cache
             .apply_diff_to_table::<ChatMessage>("chat_message", &self.chat_message)
             .with_updates_by_pk(|row| &row.id);
+        diff.content_asset = cache
+            .apply_diff_to_table::<ContentAsset>("content_asset", &self.content_asset)
+            .with_updates_by_pk(|row| &row.id);
         diff.player = cache
             .apply_diff_to_table::<Player>("player", &self.player)
             .with_updates_by_pk(|row| &row.identity);
@@ -240,6 +369,9 @@ impl __sdk::DbUpdate for DbUpdate {
             match &table_rows.table[..] {
                 "chat_message" => db_update
                     .chat_message
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "content_asset" => db_update
+                    .content_asset
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "player" => db_update
                     .player
@@ -275,6 +407,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "chat_message" => db_update
                     .chat_message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "content_asset" => db_update
+                    .content_asset
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "player" => db_update
                     .player
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -309,6 +444,7 @@ impl __sdk::DbUpdate for DbUpdate {
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
     chat_message: __sdk::TableAppliedDiff<'r, ChatMessage>,
+    content_asset: __sdk::TableAppliedDiff<'r, ContentAsset>,
     player: __sdk::TableAppliedDiff<'r, Player>,
     player_plot: __sdk::TableAppliedDiff<'r, PlayerPlot>,
     player_position: __sdk::TableAppliedDiff<'r, PlayerPosition>,
@@ -331,6 +467,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ChatMessage>(
             "chat_message",
             &self.chat_message,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ContentAsset>(
+            "content_asset",
+            &self.content_asset,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Player>("player", &self.player, event);
@@ -1012,6 +1153,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         chat_message_table::register_table(client_cache);
+        content_asset_table::register_table(client_cache);
         player_table::register_table(client_cache);
         player_plot_table::register_table(client_cache);
         player_position_table::register_table(client_cache);
@@ -1021,6 +1163,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "chat_message",
+        "content_asset",
         "player",
         "player_plot",
         "player_position",

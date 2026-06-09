@@ -4,11 +4,13 @@ mod generated;
 use std::collections::HashMap;
 
 use generated::{
-    ChatMessage, ChatMessageTableAccess, DbConnection, Player, PlayerPlot, PlayerPlotTableAccess,
-    PlayerPosition, PlayerPositionTableAccess, PlayerTableAccess, WorldObject,
-    WorldObjectTableAccess, WorldTile, WorldTileTableAccess, interact_near, join_game, move_player,
-    place_object, place_tile, send_chat,
+    ChatMessage, ChatMessageTableAccess, ContentAsset, ContentAssetTableAccess, DbConnection,
+    Player, PlayerPlot, PlayerPlotTableAccess, PlayerPosition, PlayerPositionTableAccess,
+    PlayerTableAccess, WorldObject, WorldObjectTableAccess, WorldTile, WorldTileTableAccess,
+    interact_near, join_game, move_player, place_object, place_tile, send_chat,
 };
+use generated::create_content_asset_reducer::create_content_asset;
+use generated::update_content_asset_reducer::update_content_asset;
 use godot::prelude::*;
 use spacetimedb_sdk::{DbContext, Table, credentials};
 
@@ -24,6 +26,30 @@ pub struct TinyGroveClient {
     subscribed: bool,
     status: String,
     last_error: String,
+    content_asset_cache: HashMap<u64, ContentAssetCacheEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct ContentAssetCacheEntry {
+    id: u64,
+    asset_kind: String,
+    name: String,
+    slug: String,
+    status: String,
+    grid_divisor: i32,
+    placement_w: i32,
+    placement_h: i32,
+    anchor_x: i32,
+    anchor_y: i32,
+    collidable: bool,
+    transparent_allowed: bool,
+    render_format: String,
+    render_bytes: String,
+    collision_format: String,
+    collision_bytes: String,
+    preview_format: String,
+    preview_bytes: String,
+    updated_at_micros: i64,
 }
 
 #[godot_api]
@@ -35,6 +61,7 @@ impl IRefCounted for TinyGroveClient {
             subscribed: false,
             status: "disconnected".to_string(),
             last_error: String::new(),
+            content_asset_cache: HashMap::new(),
         }
     }
 }
@@ -67,6 +94,7 @@ impl TinyGroveClient {
         self.connected = false;
         self.subscribed = false;
         self.last_error.clear();
+        self.content_asset_cache.clear();
         self.status = "connecting".to_string();
 
         let uri = uri.to_string();
@@ -98,6 +126,7 @@ impl TinyGroveClient {
                     "SELECT * FROM player_plot",
                     "SELECT * FROM player_position",
                     "SELECT * FROM chat_message",
+                    "SELECT * FROM content_asset",
                     "SELECT * FROM world_object",
                 ]);
             })
@@ -235,6 +264,110 @@ impl TinyGroveClient {
     }
 
     #[func]
+    pub fn create_content_asset(&mut self, data: Dictionary<Variant, Variant>) -> bool {
+        let Some(connection) = self.connection.as_ref() else {
+            self.last_error = "Not connected".to_string();
+            return false;
+        };
+
+        let asset_kind = data.get("kind").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let name = data.get("name").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let slug = data.get("slug").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let status = data.get("status").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let grid_divisor = data.get("grid_divisor").map(|v: Variant| v.to::<i64>()).unwrap_or(4) as i32;
+        let placement_w = data.get("placement_w").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let placement_h = data.get("placement_h").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let anchor_x = data.get("anchor_x").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
+        let anchor_y = data.get("anchor_y").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
+        let collidable = data.get("collidable").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
+        let transparent_allowed = data.get("transparent_allowed").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
+        let render_format = data.get("render_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let render_bytes = data.get("render_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let collision_format = data.get("collision_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let collision_bytes = data.get("collision_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let preview_format = data.get("preview_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let preview_bytes = data.get("preview_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+
+        match connection.reducers.create_content_asset(
+            asset_kind,
+            name,
+            slug,
+            status,
+            grid_divisor,
+            placement_w,
+            placement_h,
+            anchor_x,
+            anchor_y,
+            collidable,
+            transparent_allowed,
+            render_format,
+            render_bytes,
+            collision_format,
+            collision_bytes,
+            preview_format,
+            preview_bytes,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                self.last_error = error.to_string();
+                false
+            }
+        }
+    }
+
+    #[func]
+    pub fn update_content_asset(&mut self, asset_id: i64, data: Dictionary<Variant, Variant>) -> bool {
+        let Some(connection) = self.connection.as_ref() else {
+            self.last_error = "Not connected".to_string();
+            return false;
+        };
+
+        let asset_kind = data.get("kind").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let name = data.get("name").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let slug = data.get("slug").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let status = data.get("status").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let grid_divisor = data.get("grid_divisor").map(|v: Variant| v.to::<i64>()).unwrap_or(4) as i32;
+        let placement_w = data.get("placement_w").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let placement_h = data.get("placement_h").map(|v: Variant| v.to::<i64>()).unwrap_or(1) as i32;
+        let anchor_x = data.get("anchor_x").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
+        let anchor_y = data.get("anchor_y").map(|v: Variant| v.to::<i64>()).unwrap_or(0) as i32;
+        let collidable = data.get("collidable").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
+        let transparent_allowed = data.get("transparent_allowed").map(|v: Variant| v.to::<bool>()).unwrap_or(false);
+        let render_format = data.get("render_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let render_bytes = data.get("render_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let collision_format = data.get("collision_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let collision_bytes = data.get("collision_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let preview_format = data.get("preview_format").map(|v: Variant| v.to_string()).unwrap_or_default();
+        let preview_bytes = data.get("preview_bytes").map(|v: Variant| v.to_string()).unwrap_or_default();
+
+        match connection.reducers.update_content_asset(
+            asset_id as u64,
+            name,
+            slug,
+            status,
+            grid_divisor,
+            placement_w,
+            placement_h,
+            anchor_x,
+            anchor_y,
+            collidable,
+            transparent_allowed,
+            render_format,
+            render_bytes,
+            collision_format,
+            collision_bytes,
+            preview_format,
+            preview_bytes,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                self.last_error = error.to_string();
+                false
+            }
+        }
+    }
+
+    #[func]
     pub fn interact_near(&mut self) -> bool {
         let Some(connection) = self.connection.as_ref() else {
             self.last_error = "Not connected".to_string();
@@ -360,6 +493,65 @@ impl TinyGroveClient {
         }
 
         rows
+    }
+
+    #[func]
+    pub fn content_assets(&mut self) -> Array<Dictionary<Variant, Variant>> {
+        self.refresh_content_asset_cache();
+        let mut rows = Array::new();
+        let Some(connection) = self.connection.as_ref() else {
+            return rows;
+        };
+
+        let mut assets = connection.db.content_asset().iter().collect::<Vec<_>>();
+        assets.sort_by_key(|asset| asset.id);
+
+        for asset in assets {
+            rows.push(&content_asset_dictionary(&asset));
+        }
+
+        rows
+    }
+
+    #[func]
+    pub fn cached_content_asset(&mut self, asset_id: i64) -> Dictionary<Variant, Variant> {
+        self.refresh_content_asset_cache();
+
+        let mut dict = Dictionary::new();
+        if let Some(entry) = self.content_asset_cache.get(&(asset_id as u64)) {
+            dict.set("id", entry.id as i64);
+            dict.set("asset_kind", entry.asset_kind.clone());
+            dict.set("name", entry.name.clone());
+            dict.set("slug", entry.slug.clone());
+            dict.set("status", entry.status.clone());
+            dict.set("grid_divisor", entry.grid_divisor);
+            dict.set("placement_w", entry.placement_w);
+            dict.set("placement_h", entry.placement_h);
+            dict.set("anchor_x", entry.anchor_x);
+            dict.set("anchor_y", entry.anchor_y);
+            dict.set("collidable", entry.collidable);
+            dict.set("transparent_allowed", entry.transparent_allowed);
+            dict.set("render_format", entry.render_format.clone());
+            dict.set("render_bytes", entry.render_bytes.clone());
+            dict.set("collision_format", entry.collision_format.clone());
+            dict.set("collision_bytes", entry.collision_bytes.clone());
+            dict.set("preview_format", entry.preview_format.clone());
+            dict.set("preview_bytes", entry.preview_bytes.clone());
+            dict.set("updated_at_micros", entry.updated_at_micros);
+        }
+        dict
+    }
+
+    fn refresh_content_asset_cache(&mut self) {
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+
+        self.content_asset_cache.clear();
+        for asset in connection.db.content_asset().iter() {
+            self.content_asset_cache
+                .insert(asset.id, content_asset_cache_entry(&asset));
+        }
     }
 
     #[func]
@@ -497,6 +689,62 @@ fn world_tile_dictionary(tile: &WorldTile) -> Dictionary<Variant, Variant> {
         tile.updated_at.to_micros_since_unix_epoch(),
     );
     dict
+}
+
+fn content_asset_dictionary(asset: &ContentAsset) -> Dictionary<Variant, Variant> {
+    let mut dict = Dictionary::new();
+    dict.set("id", asset.id as i64);
+    dict.set("owner", identity_key(&asset.owner));
+    dict.set("asset_kind", asset.asset_kind.clone());
+    dict.set("name", asset.name.clone());
+    dict.set("slug", asset.slug.clone());
+    dict.set("status", asset.status.clone());
+    dict.set("grid_divisor", asset.grid_divisor);
+    dict.set("placement_w", asset.placement_w);
+    dict.set("placement_h", asset.placement_h);
+    dict.set("anchor_x", asset.anchor_x);
+    dict.set("anchor_y", asset.anchor_y);
+    dict.set("collidable", asset.collidable);
+    dict.set("transparent_allowed", asset.transparent_allowed);
+    dict.set("render_format", asset.render_format.clone());
+    dict.set("render_bytes", asset.render_bytes.clone());
+    dict.set("collision_format", asset.collision_format.clone());
+    dict.set("collision_bytes", asset.collision_bytes.clone());
+    dict.set("preview_format", asset.preview_format.clone());
+    dict.set("preview_bytes", asset.preview_bytes.clone());
+    dict.set(
+        "created_at_micros",
+        asset.created_at.to_micros_since_unix_epoch(),
+    );
+    dict.set(
+        "updated_at_micros",
+        asset.updated_at.to_micros_since_unix_epoch(),
+    );
+    dict
+}
+
+fn content_asset_cache_entry(asset: &ContentAsset) -> ContentAssetCacheEntry {
+    ContentAssetCacheEntry {
+        id: asset.id,
+        asset_kind: asset.asset_kind.clone(),
+        name: asset.name.clone(),
+        slug: asset.slug.clone(),
+        status: asset.status.clone(),
+        grid_divisor: asset.grid_divisor,
+        placement_w: asset.placement_w,
+        placement_h: asset.placement_h,
+        anchor_x: asset.anchor_x,
+        anchor_y: asset.anchor_y,
+        collidable: asset.collidable,
+        transparent_allowed: asset.transparent_allowed,
+        render_format: asset.render_format.clone(),
+        render_bytes: asset.render_bytes.clone(),
+        collision_format: asset.collision_format.clone(),
+        collision_bytes: asset.collision_bytes.clone(),
+        preview_format: asset.preview_format.clone(),
+        preview_bytes: asset.preview_bytes.clone(),
+        updated_at_micros: asset.updated_at.to_micros_since_unix_epoch(),
+    }
 }
 
 fn player_plot_dictionary(

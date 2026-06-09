@@ -72,6 +72,7 @@ var library_selected_kind := "grass"
 var place_target := Vector2.ZERO
 var place_target_clamped := Vector2.ZERO
 var place_target_valid := false
+var pixel_editor: Control
 var move_elapsed := 0.0
 var frame := 0
 var smoke_enabled := false
@@ -143,6 +144,12 @@ func _ready() -> void:
 	if client != null:
 		client.connect_local_with_profile(agent_profile)
 	_start_agent_http()
+	
+	var editor_scene := preload("res://scenes/pixel_editor.tscn")
+	pixel_editor = editor_scene.instantiate()
+	pixel_editor.visible = false
+	add_child(pixel_editor)
+	pixel_editor.save_requested.connect(_on_pixel_editor_save)
 
 func _process(delta: float) -> void:
 	if client == null:
@@ -182,10 +189,18 @@ func _input(event: InputEvent) -> void:
 			_toggle_place_mode("tile", "grass")
 		elif event.keycode == KEY_B:
 			_toggle_place_mode("object", "button")
+		elif event.keycode == KEY_P:
+			pixel_editor.visible = not pixel_editor.visible
+			if pixel_editor.visible:
+				_cancel_place_mode()
+				_close_library()
+			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE and place_mode:
 			_cancel_place_mode()
 		elif event.keycode == KEY_ESCAPE and library_open:
 			_close_library()
+		elif event.keycode == KEY_ESCAPE and pixel_editor.visible:
+			pixel_editor.visible = false
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
@@ -355,6 +370,17 @@ func _library_activate_selection() -> void:
 		else:
 			_toggle_place_mode("object", library_selected_kind)
 		_close_library()
+
+func _on_pixel_editor_save(data: Dictionary) -> void:
+	if client == null: return
+	
+	# Add the extra defaults expected by the dictionary parsing
+	data["status"] = "published"
+	data["anchor_x"] = 0
+	data["anchor_y"] = 0
+	
+	client.create_content_asset(data)
+	pixel_editor.visible = false
 
 func _update_place_preview() -> void:
 	if not place_mode or local_identity.is_empty() or not avatars.has(local_identity):

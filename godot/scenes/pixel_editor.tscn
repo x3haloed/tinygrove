@@ -1,0 +1,128 @@
+[gd_scene format=3 uid="uid://bw8d7sk8iety7"]
+
+[ext_resource type="Script" uid="uid://cggfjmepepb2d" path="res://scripts/pixel_editor.gd" id="1_pixel_editor"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_f6xnu"]
+bg_color = Color(0.03839716, 0.038397174, 0.038397126, 1)
+
+[node name="PixelEditorOverlay" type="PanelContainer" unique_id=2072445622]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_f6xnu")
+script = ExtResource("1_pixel_editor")
+
+[node name="Root" type="HBoxContainer" parent="." unique_id=633398100]
+layout_mode = 2
+
+[node name="ToolsPanel" type="VBoxContainer" parent="Root" unique_id=1998425933]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+
+[node name="ToolsLabel" type="Label" parent="Root/ToolsPanel" unique_id=2040907009]
+layout_mode = 2
+text = "Tools"
+
+[node name="PenButton" type="Button" parent="Root/ToolsPanel" unique_id=575684748]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+text = "Pen"
+
+[node name="FillButton" type="Button" parent="Root/ToolsPanel" unique_id=924818750]
+layout_mode = 2
+toggle_mode = true
+text = "Fill"
+
+[node name="HSeparator" type="HSeparator" parent="Root/ToolsPanel" unique_id=1573313169]
+layout_mode = 2
+
+[node name="ColorLabel" type="Label" parent="Root/ToolsPanel" unique_id=1781061883]
+layout_mode = 2
+text = "Colors"
+
+[node name="ColorGrid" type="GridContainer" parent="Root/ToolsPanel" unique_id=245163411]
+layout_mode = 2
+columns = 2
+
+[node name="CenterPanel" type="VBoxContainer" parent="Root" unique_id=700358815]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Header" type="HBoxContainer" parent="Root/CenterPanel" unique_id=646258244]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Root/CenterPanel/Header" unique_id=995104370]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Pixel Editor"
+horizontal_alignment = 1
+
+[node name="CloseButton" type="Button" parent="Root/CenterPanel/Header" unique_id=677573699]
+layout_mode = 2
+text = "Close"
+
+[node name="CanvasContainer" type="CenterContainer" parent="Root/CenterPanel" unique_id=2039351420]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="DrawingCanvas" type="Control" parent="Root/CenterPanel/CanvasContainer" unique_id=163372665]
+custom_minimum_size = Vector2(256, 256)
+layout_mode = 2
+
+[node name="PropsPanel" type="VBoxContainer" parent="Root" unique_id=1699677091]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+
+[node name="PropsLabel" type="Label" parent="Root/PropsPanel" unique_id=464021639]
+layout_mode = 2
+text = "Properties"
+
+[node name="NameEdit" type="LineEdit" parent="Root/PropsPanel" unique_id=1998581199]
+layout_mode = 2
+placeholder_text = "Name (e.g. Tree)"
+
+[node name="SlugEdit" type="LineEdit" parent="Root/PropsPanel" unique_id=85018201]
+layout_mode = 2
+placeholder_text = "Slug (e.g. tree_1)"
+
+[node name="KindButton" type="OptionButton" parent="Root/PropsPanel" unique_id=1552318319]
+layout_mode = 2
+
+[node name="GridDivisor" type="SpinBox" parent="Root/PropsPanel" unique_id=146164849]
+layout_mode = 2
+min_value = 1.0
+max_value = 64.0
+value = 4.0
+prefix = "Grid:"
+
+[node name="PlacementW" type="SpinBox" parent="Root/PropsPanel" unique_id=381811959]
+layout_mode = 2
+min_value = 1.0
+value = 1.0
+prefix = "W:"
+
+[node name="PlacementH" type="SpinBox" parent="Root/PropsPanel" unique_id=1260977223]
+layout_mode = 2
+min_value = 1.0
+value = 1.0
+prefix = "H:"
+
+[node name="CollidableCheck" type="CheckButton" parent="Root/PropsPanel" unique_id=1372362989]
+layout_mode = 2
+button_pressed = true
+text = "Collidable"
+
+[node name="TransparentCheck" type="CheckButton" parent="Root/PropsPanel" unique_id=560749179]
+layout_mode = 2
+text = "Transparent"
+
+[node name="HSeparator" type="HSeparator" parent="Root/PropsPanel" unique_id=118435276]
+layout_mode = 2
+
+[node name="SaveButton" type="Button" parent="Root/PropsPanel" unique_id=1793160554]
+layout_mode = 2
+text = "Save to World"
