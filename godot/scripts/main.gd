@@ -160,12 +160,22 @@ func _process(delta: float) -> void:
 	_handle_movement(delta)
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
-		_update_place_preview()
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
 		_toggle_library()
+		_release_ui_focus()
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		if _release_ui_focus_or_close_overlay():
+			get_viewport().set_input_as_handled()
+			return
+
+func _unhandled_input(event: InputEvent) -> void:
+	if _gameplay_input_blocked():
+		return
+
+	if event is InputEventMouseMotion:
+		_update_place_preview()
 	if event is InputEventMouseButton and event.pressed:
 		if place_mode and event.button_index == MOUSE_BUTTON_LEFT:
 			_attempt_place_selected()
@@ -191,6 +201,33 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ESCAPE and pixel_editor.visible:
 			pixel_editor.visible = false
 
+func _release_ui_focus_or_close_overlay() -> bool:
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner != null:
+		focus_owner.release_focus()
+		return true
+	if place_mode:
+		_cancel_place_mode()
+		return true
+	if library_open:
+		_close_library()
+		return true
+	if pixel_editor.visible:
+		pixel_editor.visible = false
+		return true
+	return false
+
+func _release_ui_focus() -> void:
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner != null:
+		focus_owner.release_focus()
+
+func _gameplay_input_blocked() -> bool:
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner == null:
+		return false
+	return focus_owner is LineEdit or focus_owner is TextEdit or focus_owner is SpinBox or focus_owner is OptionButton
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
 		_remove_agent_registry()
@@ -207,6 +244,10 @@ func _send_chat() -> void:
 		chat_edit.clear()
 
 func _handle_movement(delta: float) -> void:
+	if _gameplay_input_blocked():
+		move_elapsed = 0.0
+		return
+
 	move_elapsed += delta
 	if move_elapsed < MOVE_REPEAT_SECONDS:
 		return
@@ -222,6 +263,8 @@ func _handle_movement(delta: float) -> void:
 	client.move_player(ix, iy)
 
 func _handle_interaction() -> void:
+	if _gameplay_input_blocked():
+		return
 	if Input.is_action_just_pressed("interact"):
 		client.interact_near()
 
