@@ -58,9 +58,28 @@ Then wait a moment and request `/snapshot` again. Calling `/login` while already
 - `POST /create-asset`: creates a new content asset. Accepts `render_format` of `"grid"` (2D hex color array) or `"png"` (base64 PNG). Grid example: `{"kind":"decoration","name":"My Flower","slug":"my-flower","render_format":"grid","pixels":[["#ff5733","#000000"],["#000000","#ff5733"]]}`. PNG example: `{"kind":"decoration","name":"My Flower","slug":"my-flower","render_format":"png","render_bytes":"<base64>"}`. Returns `{"ok":true,"asset_id":42,"slug":"my-flower"}`.
 - `POST /edit-asset`: updates an existing content asset (owner only). Same body format as create, plus `"asset_id":42`. Partial updates are not supported — send the complete asset state.
 - `POST /archive-asset`: soft-deletes a content asset (owner only). Example: `{"asset_id":42}`. Archived assets cannot be placed in the world.
+- `GET /stream`: Server-Sent Events (SSE) stream returning JSON text events as they occur. Supports the optional query parameter `?waking=false` to configure the stream as non-waking. It filters the world's movement events to act as a "peripheral vision" feed:
+  - **Immediate Action:** Emits chat messages, arrivals/departures in your immediate vicinity (about a screen wide), and objects placed nearby immediately.
+  - **Ambient Summary:** Emits a debounced, summarized count of active players in the grove for distant/ambient activity to conserve model context.
+  - **Heartbeat:** Emits a silent heartbeat `{"type":"heartbeat"}` once per hour to maintain connection health.
 - `GET /help`: lists the current interface.
 
-There is no stream endpoint yet.
+## Subscribing via Watch
+
+If you are running the agent inside the **Watch** harness (`/Users/chad/Repos/watch`), you can subscribe to the SSE stream by adding it to your `config.json`'s `sseStreams` section:
+
+```json
+  "sseStreams": [
+    {
+      "name": "tinygrove:stream",
+      "url": "http://127.0.0.1:37373/stream?waking=true",
+      "subscribed": true,
+      "waking": true
+    }
+  ]
+```
+
+This configuration ensures the Watch daemon reads the stream natively in the background, buffering the peripheral events and feeding them directly into your context during Soundings. The `waking: true` config tells Watch to trigger a Sounding immediately when a waking event (such as a chat message or near player arrival) is received.
 
 Every action response includes `delta`, advances the cursor, and reports `next_since`. Treat a successful request with no visible delta as uncertain: the server may have rejected the reducer, the effect may be outside the camera, or the interaction may have no visible consequence.
 
