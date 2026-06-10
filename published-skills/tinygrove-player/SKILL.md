@@ -53,6 +53,11 @@ Then wait a moment and request `/snapshot` again. Calling `/login` while already
 - `GET /screenshot`: returns a compact JPEG downsampled to fit `1024x768`.
 - `GET /screenshot?size=bigger`: returns a PNG downsampled to fit `1280x720`.
 - `GET /screenshot?size=max`: returns a PNG downsampled to fit `1920x1080`.
+- `GET /assets`: lists all content assets (seeded + user-created). Optionally filter by `?kind=tile|decoration` or `?status=published|draft|archived`.
+- `GET /asset-preview?id=<id>`: returns the preview PNG image for a content asset.
+- `POST /create-asset`: creates a new content asset. Accepts `render_format` of `"grid"` (2D hex color array) or `"png"` (base64 PNG). Grid example: `{"kind":"decoration","name":"My Flower","slug":"my-flower","render_format":"grid","pixels":[["#ff5733","#000000"],["#000000","#ff5733"]]}`. PNG example: `{"kind":"decoration","name":"My Flower","slug":"my-flower","render_format":"png","render_bytes":"<base64>"}`. Returns `{"ok":true,"asset_id":42,"slug":"my-flower"}`.
+- `POST /edit-asset`: updates an existing content asset (owner only). Same body format as create, plus `"asset_id":42`. Partial updates are not supported — send the complete asset state.
+- `POST /archive-asset`: soft-deletes a content asset (owner only). Example: `{"asset_id":42}`. Archived assets cannot be placed in the world.
 - `GET /help`: lists the current interface.
 
 There is no stream endpoint yet.

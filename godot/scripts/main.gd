@@ -955,6 +955,35 @@ func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> vo
 			else:
 				var screenshot := _agent_screenshot(str(query.get("size", "default")))
 				_send_agent_http_bytes(peer, 200, screenshot["content_type"], screenshot["bytes"])
+		"/assets":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /assets, optionally with ?kind=tile|decoration or ?status=published."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_list_assets(query))
+		"/asset-preview":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /asset-preview?id=<asset_id>."})
+			else:
+				var preview := _agent_asset_preview(query)
+				if preview.has("error"):
+					_send_agent_http_json(peer, 404, {"ok": false, "message": preview["error"]})
+				else:
+					_send_agent_http_bytes(peer, 200, "image/png", preview["bytes"])
+		"/create-asset":
+			if method != "POST":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /create-asset with JSON body."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_create_asset(request["body"]))
+		"/edit-asset":
+			if method != "POST":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /edit-asset with JSON body."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_edit_asset(request["body"]))
+		"/archive-asset":
+			if method != "POST":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use POST /archive-asset with JSON body."})
+			else:
+				_send_agent_http_json(peer, 200, _agent_archive_asset(request["body"]))
 		_:
 			_send_agent_http_json(peer, 404, {"ok": false, "message": "Unknown Tiny Grove agent endpoint. Try GET /help."})
 
@@ -1049,6 +1078,11 @@ func _agent_help() -> Dictionary:
 			"GET /screenshot - JPEG, downsampled to fit 1024x768",
 			"GET /screenshot?size=bigger - PNG, downsampled to fit 1280x720",
 			"GET /screenshot?size=max - PNG, downsampled to fit 1920x1080",
+			"GET /assets - list content assets (optionally filter by ?kind= or ?status=)",
+			"GET /asset-preview?id=<id> - preview image for a content asset",
+			"POST /create-asset - create a new content asset (grid or PNG input)",
+			"POST /edit-asset - update an existing content asset (owner only)",
+			"POST /archive-asset - soft-delete a content asset (owner only)",
 		],
 		"notes": [
 			"No stream endpoint exists yet.",
@@ -1057,6 +1091,8 @@ func _agent_help() -> Dictionary:
 			"Use layer=tile with tile_kind=grass|path|water|dirt for ground placement, or layer=object with kind=flower|button|sign|rock for top-of-tile placement.",
 			"Action endpoints include a delta and advance your cursor.",
 			"If a response says you are not logged in, call POST /login and retry after a moment.",
+			"Content authoring: /create-asset accepts render_format='grid' (2D hex array) or 'png' (base64). Grid format: {\"pixels\": [[\"#rrggbb\", ...], ...]}.",
+			"Archived assets cannot be placed in the world but remain in the database.",
 		],
 	}
 
@@ -1287,6 +1323,293 @@ func _agent_interact(query: Dictionary) -> Dictionary:
 	result["message"] = "Interacted with the nearby object you are facing." if sent and int(delta["visible_event_count"]) > 0 else "Interact request was sent, but no visible delta arrived. There may be nothing nearby or the interaction may have no visible effect." if sent else "Interact request could not be sent. There may be nothing nearby."
 	result["delta"] = delta
 	return result
+
+func _agent_list_assets(query: Dictionary) -> Dictionary:
+	var kind_filter := str(query.get("kind", "")).strip_edges().to_lower()
+	var status_filter := str(query.get("status", "")).strip_edges().to_lower()
+	var assets: Array = []
+	for row: Dictionary in client.content_assets():
+		var row_kind := str(row.get("asset_kind", ""))
+		if not kind_filter.is_empty() and row_kind != kind_filter:
+			continue
+		var row_status := str(row.get("status", ""))
+		if not status_filter.is_empty() and row_status != status_filter:
+			continue
+		var created_micros: int = int(row.get("created_at_micros", 0))
+		assets.append({
+			"id": int(row.get("id", 0)),
+			"owner": str(row.get("owner", "")),
+			"kind": row_kind,
+			"name": str(row.get("name", "")),
+			"slug": str(row.get("slug", "")),
+			"status": row_status,
+			"grid_divisor": int(row.get("grid_divisor", 4)),
+			"placement_w": int(row.get("placement_w", 4)),
+			"placement_h": int(row.get("placement_h", 4)),
+			"collidable": bool(row.get("collidable", false)),
+			"transparent_allowed": bool(row.get("transparent_allowed", false)),
+			"render_format": str(row.get("render_format", "")),
+			"created_at": _agent_micros_to_iso(created_micros),
+		})
+	return {"ok": true, "assets": assets}
+
+func _agent_asset_preview(query: Dictionary) -> Dictionary:
+	var asset_id: int = int(query.get("id", 0))
+	if asset_id <= 0:
+		return {"error": "Provide ?id=<asset_id>."}
+	for row: Dictionary in client.content_assets():
+		if int(row.get("id", 0)) == asset_id:
+			var preview_bytes: String = str(row.get("preview_bytes", ""))
+			if preview_bytes.is_empty():
+				preview_bytes = str(row.get("render_bytes", ""))
+			if preview_bytes.is_empty():
+				return {"error": "Asset has no preview data."}
+			var png_data := Marshalls.base64_to_raw(preview_bytes)
+			if png_data.is_empty():
+				return {"error": "Could not decode preview data."}
+			return {"bytes": png_data}
+	return {"error": "Asset not found."}
+
+func _agent_create_asset(body: String) -> Dictionary:
+	var result := _agent_action_base("create-asset")
+	if not result["ok"]:
+		return result
+
+	var payload: Variant = JSON.parse_string(body)
+	if typeof(payload) != TYPE_DICTIONARY:
+		return {"ok": false, "message": "Provide a JSON body."}
+	var data: Dictionary = payload
+
+	var kind := str(data.get("kind", "")).strip_edges().to_lower()
+	if kind.is_empty():
+		kind = "decoration"
+	var name := str(data.get("name", "")).strip_edges()
+	var slug := str(data.get("slug", "")).strip_edges()
+	if name.is_empty() or slug.is_empty():
+		return {"ok": false, "message": "Provide name and slug."}
+
+	var render_format := str(data.get("render_format", "grid")).strip_edges().to_lower()
+	var render_bytes := ""
+
+	if render_format == "grid":
+		var grid_result := _agent_grid_to_png(data)
+		if grid_result.has("error"):
+			return {"ok": false, "message": grid_result["error"]}
+		render_bytes = grid_result["bytes"]
+	elif render_format == "png":
+		render_bytes = str(data.get("render_bytes", "")).strip_edges()
+		if render_bytes.is_empty():
+			return {"ok": false, "message": "Provide render_bytes as base64 PNG."}
+	else:
+		return {"ok": false, "message": "render_format must be 'grid' or 'png'."}
+
+	var placement_variant := str(data.get("placement_variant", "Full")).strip_edges()
+	var grid_divisor: int = int(data.get("grid_divisor", 4))
+	var collidable: bool = bool(data.get("collidable", false))
+	var transparent_allowed: bool = bool(data.get("transparent_allowed", false))
+
+	var asset_data := {
+		"kind": kind,
+		"name": name,
+		"slug": slug,
+		"status": "published",
+		"grid_divisor": grid_divisor,
+		"placement_variant": placement_variant,
+		"anchor_x": int(data.get("anchor_x", 0)),
+		"anchor_y": int(data.get("anchor_y", 0)),
+		"collidable": collidable,
+		"transparent_allowed": transparent_allowed,
+		"render_format": "png",
+		"render_bytes": render_bytes,
+		"collision_format": "mask1",
+		"collision_bytes": "",
+		"preview_format": "png",
+		"preview_bytes": render_bytes,
+	}
+
+	var sent: bool = client.create_content_asset(asset_data)
+	_agent_settle_after_action()
+
+	if not sent:
+		return {"ok": false, "message": "Create request could not be sent. Check connection."}
+
+	# Find the asset by slug to extract the generated id
+	var new_id := 0
+	for row: Dictionary in client.content_assets():
+		if str(row.get("slug", "")) == slug and str(row.get("owner", "")) == str(client.local_identity()):
+			new_id = int(row.get("id", 0))
+			break
+
+	return {"ok": true, "asset_id": new_id, "slug": slug}
+
+func _agent_edit_asset(body: String) -> Dictionary:
+	var result := _agent_action_base("edit-asset")
+	if not result["ok"]:
+		return result
+
+	var payload: Variant = JSON.parse_string(body)
+	if typeof(payload) != TYPE_DICTIONARY:
+		return {"ok": false, "message": "Provide a JSON body."}
+	var data: Dictionary = payload
+
+	var asset_id: int = int(data.get("asset_id", 0))
+	if asset_id <= 0:
+		return {"ok": false, "message": "Provide asset_id."}
+
+	# Verify ownership
+	var existing: Dictionary = {}
+	for row: Dictionary in client.content_assets():
+		if int(row.get("id", 0)) == asset_id:
+			existing = row
+			break
+	if existing.is_empty():
+		return {"ok": false, "message": "Asset not found."}
+	if str(existing.get("owner", "")) != str(client.local_identity()):
+		return {"ok": false, "message": "You can only edit your own assets."}
+
+	var render_format := str(data.get("render_format", "png")).strip_edges().to_lower()
+	var render_bytes := ""
+
+	if render_format == "grid":
+		var grid_result := _agent_grid_to_png(data)
+		if grid_result.has("error"):
+			return {"ok": false, "message": grid_result["error"]}
+		render_bytes = grid_result["bytes"]
+	elif render_format == "png":
+		render_bytes = str(data.get("render_bytes", "")).strip_edges()
+		if render_bytes.is_empty():
+			# Keep existing render bytes if not provided
+			render_bytes = str(existing.get("render_bytes", ""))
+	else:
+		return {"ok": false, "message": "render_format must be 'grid' or 'png'."}
+
+	var name := str(data.get("name", str(existing.get("name", "")))).strip_edges()
+	var slug := str(data.get("slug", str(existing.get("slug", "")))).strip_edges()
+	var placement_variant := str(data.get("placement_variant", "Full")).strip_edges()
+	var grid_divisor: int = int(data.get("grid_divisor", int(existing.get("grid_divisor", 4))))
+	var collidable: bool = bool(data.get("collidable", bool(existing.get("collidable", false))))
+	var transparent_allowed: bool = bool(data.get("transparent_allowed", bool(existing.get("transparent_allowed", false))))
+	var status := str(data.get("status", str(existing.get("status", "published")))).strip_edges()
+
+	var edit_data := {
+		"name": name,
+		"slug": slug,
+		"status": status,
+		"grid_divisor": grid_divisor,
+		"placement_variant": placement_variant,
+		"anchor_x": int(data.get("anchor_x", int(existing.get("anchor_x", 0)))),
+		"anchor_y": int(data.get("anchor_y", int(existing.get("anchor_y", 0)))),
+		"collidable": collidable,
+		"transparent_allowed": transparent_allowed,
+		"render_format": "png",
+		"render_bytes": render_bytes,
+		"collision_format": "mask1",
+		"collision_bytes": "",
+		"preview_format": "png",
+		"preview_bytes": render_bytes,
+	}
+
+	var sent: bool = client.update_content_asset(asset_id, edit_data)
+	_agent_settle_after_action()
+
+	if not sent:
+		return {"ok": false, "message": "Edit request could not be sent. Check connection."}
+
+	return {"ok": true, "asset_id": asset_id, "slug": slug}
+
+func _agent_archive_asset(body: String) -> Dictionary:
+	var result := _agent_action_base("archive-asset")
+	if not result["ok"]:
+		return result
+
+	var payload: Variant = JSON.parse_string(body)
+	if typeof(payload) != TYPE_DICTIONARY:
+		return {"ok": false, "message": "Provide a JSON body."}
+	var data: Dictionary = payload
+
+	var asset_id: int = int(data.get("asset_id", 0))
+	if asset_id <= 0:
+		return {"ok": false, "message": "Provide asset_id."}
+
+	# Verify ownership
+	var existing: Dictionary = {}
+	for row: Dictionary in client.content_assets():
+		if int(row.get("id", 0)) == asset_id:
+			existing = row
+			break
+	if existing.is_empty():
+		return {"ok": false, "message": "Asset not found."}
+	if str(existing.get("owner", "")) != str(client.local_identity()):
+		return {"ok": false, "message": "You can only archive your own assets."}
+
+	# Update status to archived, keeping all other fields the same
+	var edit_data := {
+		"name": str(existing.get("name", "")),
+		"slug": str(existing.get("slug", "")),
+		"status": "archived",
+		"grid_divisor": int(existing.get("grid_divisor", 4)),
+		"placement_variant": "Full",
+		"anchor_x": int(existing.get("anchor_x", 0)),
+		"anchor_y": int(existing.get("anchor_y", 0)),
+		"collidable": bool(existing.get("collidable", false)),
+		"transparent_allowed": bool(existing.get("transparent_allowed", false)),
+		"render_format": str(existing.get("render_format", "png")),
+		"render_bytes": str(existing.get("render_bytes", "")),
+		"collision_format": str(existing.get("collision_format", "mask1")),
+		"collision_bytes": str(existing.get("collision_bytes", "")),
+		"preview_format": str(existing.get("preview_format", "png")),
+		"preview_bytes": str(existing.get("preview_bytes", "")),
+	}
+
+	var sent: bool = client.update_content_asset(asset_id, edit_data)
+	_agent_settle_after_action()
+
+	if not sent:
+		return {"ok": false, "message": "Archive request could not be sent. Check connection."}
+
+	return {"ok": true, "asset_id": asset_id}
+
+func _agent_grid_to_png(data: Dictionary) -> Dictionary:
+	var pixels: Variant = data.get("pixels", [])
+	if typeof(pixels) != TYPE_ARRAY or (pixels as Array).is_empty():
+		return {"error": "Provide pixels as a 2D array of hex color strings."}
+
+	var rows: Array = pixels as Array
+	var height := rows.size()
+	var first_row: Variant = rows[0]
+	if typeof(first_row) != TYPE_ARRAY:
+		return {"error": "Pixels must be a 2D array: [[\"#rrggbb\", ...], ...]."}
+	var width := (first_row as Array).size()
+
+	if width <= 0 or height <= 0:
+		return {"error": "Pixel grid must have positive dimensions."}
+
+	var image := Image.create(width, height, false, Image.FORMAT_RGBA8)
+	for y in range(height):
+		var row: Variant = rows[y]
+		if typeof(row) != TYPE_ARRAY:
+			return {"error": "Row %d is not an array." % y}
+		var row_arr: Array = row as Array
+		if row_arr.size() != width:
+			return {"error": "Row %d has %d columns, expected %d." % [y, row_arr.size(), width]}
+		for x in range(width):
+			var color_str: String = str(row_arr[x]).strip_edges()
+			if not color_str.begins_with("#") or color_str.length() != 7:
+				return {"error": "Invalid hex color '%s' at [%d][%d]. Use #rrggbb." % [color_str, y, x]}
+			var r := color_str.substr(1, 2).hex_to_int()
+			var g := color_str.substr(3, 2).hex_to_int()
+			var b := color_str.substr(5, 2).hex_to_int()
+			image.set_pixel(x, y, Color(r / 255.0, g / 255.0, b / 255.0))
+
+	var png_bytes := image.save_png_to_buffer()
+	var base64_data := Marshalls.raw_to_base64(png_bytes)
+	return {"bytes": base64_data}
+
+func _agent_micros_to_iso(micros: int) -> String:
+	if micros <= 0:
+		return ""
+	var unix_sec := micros / 1_000_000
+	return Time.get_datetime_string_from_unix_time(unix_sec)
 
 func _agent_action_base(action_name: String) -> Dictionary:
 	if not _agent_is_logged_in():
