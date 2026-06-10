@@ -1908,6 +1908,7 @@ func _start_agent_sse_connection(peer: StreamPeerTCP, _query: Dictionary) -> voi
 	headers += "Access-Control-Allow-Origin: *\r\n\r\n"
 	peer.put_data(headers.to_utf8_buffer())
 	agent_sse_connections.append({"peer": peer})
+	print("[SSE Server] New agent SSE connection established from %s:%d" % [peer.get_connected_host(), peer.get_connected_port()])
 
 func _process_agent_sse(delta: float) -> void:
 	agent_sse_silence_timer += delta
@@ -1924,11 +1925,13 @@ func _process_agent_sse(delta: float) -> void:
 	for connection in agent_sse_connections:
 		var peer: StreamPeerTCP = connection["peer"]
 		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			print("[SSE Server] SSE peer disconnected unexpectedly. Status: %d" % peer.get_status())
 			finished.append(connection)
 			continue
 			
 		var err = peer.poll()
 		if err != OK or peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			print("[SSE Server] SSE peer poll error (%d) or status lost. Disconnecting peer." % err)
 			finished.append(connection)
 			
 	for connection in finished:
@@ -1959,7 +1962,11 @@ func _emit_sse_event(kind: String, details: Dictionary) -> void:
 	for connection in agent_sse_connections:
 		var peer: StreamPeerTCP = connection["peer"]
 		if peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
-			peer.put_data(bytes)
+			var err := peer.put_data(bytes)
+			if err != OK:
+				print("[SSE Server] Failed to push event '%s' to peer %s:%d, error: %d" % [kind, peer.get_connected_host(), peer.get_connected_port(), err])
+			else:
+				print("[SSE Server] Pushed sse event: %s" % kind)
 
 func _agent_registry_dir() -> String:
 	return ProjectSettings.globalize_path("res://%s" % AGENT_REGISTRY_RELATIVE_DIR).simplify_path()
