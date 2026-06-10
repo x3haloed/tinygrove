@@ -1301,10 +1301,14 @@ func _agent_place(body: String, query: Dictionary) -> Dictionary:
 		result["message"] = "Provide layer=tile and tile_kind, or layer=object and kind, with a target within %d tiles. Example: POST /place with {\"layer\":\"tile\",\"tile_kind\":\"grass\",\"tile_x\":12,\"tile_y\":7}." % PLACE_RADIUS_TILES
 		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
 		return result
+	if layer != "tile" and layer != "object":
+		result["ok"] = false
+		result["message"] = "Use layer=tile or layer=object."
+		result["delta"] = _agent_delta_payload(agent_last_seen_cursor, true)
+		return result
 
 	var sent: bool = false
-	if layer == "tile":
-		sent = client.place_tile(kind, int(target["x"]), int(target["y"]))
+	sent = client.place_tile(kind, int(target["x"]), int(target["y"]))
 	_agent_settle_after_action()
 	var delta := _agent_delta_payload(agent_last_seen_cursor, true)
 	result["ok"] = sent
