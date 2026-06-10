@@ -313,7 +313,12 @@ pub fn place_tile(
         ));
     }
 
-    if ctx.db.world_tile().iter().any(|tile| tile.x == target.0 && tile.y == target.1) {
+    if ctx
+        .db
+        .world_tile()
+        .iter()
+        .any(|tile| tile.x == target.0 && tile.y == target.1)
+    {
         return Err(format!(
             "There is already a tile at ({}, {})",
             target.0, target.1
@@ -360,7 +365,12 @@ pub fn create_content_asset(
     let asset_kind = clean_asset_kind(asset_kind)?;
     let name = clean_asset_name(name)?;
     let slug = clean_asset_slug(slug)?;
-    if ctx.db.content_asset().iter().any(|asset| asset.slug == slug) {
+    if ctx
+        .db
+        .content_asset()
+        .iter()
+        .any(|asset| asset.slug == slug)
+    {
         return Err(format!("Content asset with slug '{slug}' already exists"));
     }
     let status = clean_asset_status(status)?;
@@ -371,11 +381,13 @@ pub fn create_content_asset(
     let collision_bytes = clean_asset_data(collision_bytes)?;
     let preview_bytes = clean_asset_data(preview_bytes)?;
 
-    if grid_divisor <= 0 {
-        return Err("Grid divisor must be positive".to_string());
-    }
-    let (placement_w, placement_h, collidable, transparent_allowed) =
-        normalize_asset_shape(&asset_kind, placement_variant, collidable, transparent_allowed)?;
+    let grid_divisor = clean_grid_divisor(grid_divisor)?;
+    let (placement_w, placement_h, collidable, transparent_allowed) = normalize_asset_shape(
+        &asset_kind,
+        placement_variant,
+        collidable,
+        transparent_allowed,
+    )?;
 
     ctx.db.content_asset().insert(ContentAsset {
         id: 0,
@@ -453,6 +465,7 @@ pub fn update_content_asset(
     let render_bytes = clean_asset_data(render_bytes)?;
     let collision_bytes = clean_asset_data(collision_bytes)?;
     let preview_bytes = clean_asset_data(preview_bytes)?;
+    let grid_divisor = clean_grid_divisor(grid_divisor)?;
     let (placement_w, placement_h, collidable, transparent_allowed) = normalize_asset_shape(
         &existing.asset_kind,
         placement_variant,
@@ -636,10 +649,9 @@ fn plot_contains(plot: &PlayerPlot, x: i32, y: i32) -> bool {
 }
 
 /// Check whether the full footprint of an asset fits within the plot boundary.
-/// `placement_w` and `placement_h` are in grid units; we convert to world units
-/// using the same factor the server uses for tile sizes: MOVE_STEP / grid_divisor.
-/// The anchor offsets (in grid units) shift the bounding box relative to the
-/// target point, which the client sends as the center of the placement cell.
+/// `placement_w` and `placement_h` are in asset-grid units. Scale world-space
+/// coordinates by `grid_divisor` instead of dividing by it, so fine grids do not
+/// truncate to zero-sized footprints.
 fn plot_contains_footprint(
     plot: &PlayerPlot,
     target_x: i32,
@@ -650,24 +662,28 @@ fn plot_contains_footprint(
     anchor_y: i32,
     grid_divisor: i32,
 ) -> bool {
-    // Convert grid-unit dimensions to world units.
-    // Each grid unit = MOVE_STEP / grid_divisor world units.
-    let world_per_grid = MOVE_STEP / grid_divisor;
-    let half_w = placement_w * world_per_grid / 2;
-    let half_h = placement_h * world_per_grid / 2;
-    // Anchor is in grid units relative to the top-left of the bounding box.
-    // A positive anchor shifts the visual right/down, so the bounding box
-    // top-left corner moves opposite to the anchor.
-    let anchor_world_x = anchor_x * world_per_grid;
-    let anchor_world_y = anchor_y * world_per_grid;
-    let left = target_x - half_w - anchor_world_x;
-    let top = target_y - half_h - anchor_world_y;
-    let right = left + placement_w * world_per_grid;
-    let bottom = top + placement_h * world_per_grid;
-    left >= plot.origin_x
-        && top >= plot.origin_y
-        && right <= plot.origin_x + plot.width
-        && bottom <= plot.origin_y + plot.height
+    if grid_divisor <= 0 || placement_w <= 0 || placement_h <= 0 {
+        return false;
+    }
+
+    let scale = grid_divisor as i64;
+    let target_x = target_x as i64 * scale;
+    let target_y = target_y as i64 * scale;
+    let footprint_w = placement_w as i64 * MOVE_STEP as i64;
+    let footprint_h = placement_h as i64 * MOVE_STEP as i64;
+    let anchor_x = anchor_x as i64 * MOVE_STEP as i64;
+    let anchor_y = anchor_y as i64 * MOVE_STEP as i64;
+
+    let left = target_x - footprint_w / 2 - anchor_x;
+    let top = target_y - footprint_h / 2 - anchor_y;
+    let right = left + footprint_w;
+    let bottom = top + footprint_h;
+    let plot_left = plot.origin_x as i64 * scale;
+    let plot_top = plot.origin_y as i64 * scale;
+    let plot_right = (plot.origin_x + plot.width) as i64 * scale;
+    let plot_bottom = (plot.origin_y + plot.height) as i64 * scale;
+
+    left >= plot_left && top >= plot_top && right <= plot_right && bottom <= plot_bottom
 }
 
 fn within_place_radius(position: &PlayerPosition, x: i32, y: i32) -> bool {
@@ -836,6 +852,13 @@ fn clean_asset_status(status: String) -> Result<String, String> {
         "draft" | "published" | "archived" => Ok(status),
         _ => Err("Asset status must be draft, published, or archived".to_string()),
     }
+}
+
+fn clean_grid_divisor(grid_divisor: i32) -> Result<i32, String> {
+    if grid_divisor <= 0 {
+        return Err("Grid divisor must be positive".to_string());
+    }
+    Ok(grid_divisor)
 }
 
 fn clean_asset_format(format: String) -> Result<String, String> {
