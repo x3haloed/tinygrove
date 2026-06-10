@@ -247,9 +247,9 @@ fn smoke_two_clients() -> Result<(), String> {
         require_contains(&chat, "hello from Moss", "chat query")?;
         require_contains(&chat, "inspects", "chat query")?;
 
-        let objects = sql("SELECT * FROM world_object")?;
-        require_contains(&objects, "flower", "world object query")?;
-        require_contains(&objects, "button", "world object query")?;
+        let objects = sql("SELECT * FROM world_tile")?;
+        require_contains(&objects, "flower", "world tile query")?;
+        require_contains(&objects, "button", "world tile query")?;
 
         println!("smoke two-clients: replicated players, plots, positions, chat, and world objects");
         Ok(())

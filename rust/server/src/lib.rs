@@ -263,6 +263,18 @@ pub fn place_tile(
     require_joined(ctx)?;
 
     let kind = clean_asset_slug(kind)?;
+    let asset = ctx
+        .db
+        .content_asset()
+        .iter()
+        .find(|asset| asset.slug == kind)
+        .ok_or_else(|| format!("Content asset with slug '{kind}' not found"))?;
+    if asset.status != "published" {
+        return Err(format!(
+            "Content asset with slug '{kind}' is not published (status: {})",
+            asset.status
+        ));
+    }
     let position = require_position(ctx)?;
     let target = (target_x, target_y);
     let plot = require_plot(ctx)?;
@@ -321,6 +333,9 @@ pub fn create_content_asset(
     let asset_kind = clean_asset_kind(asset_kind)?;
     let name = clean_asset_name(name)?;
     let slug = clean_asset_slug(slug)?;
+    if ctx.db.content_asset().iter().any(|asset| asset.slug == slug) {
+        return Err(format!("Content asset with slug '{slug}' already exists"));
+    }
     let status = clean_asset_status(status)?;
     let render_format = clean_asset_format(render_format)?;
     let collision_format = clean_asset_format(collision_format)?;
@@ -396,6 +411,14 @@ pub fn update_content_asset(
 
     let name = clean_asset_name(name)?;
     let slug = clean_asset_slug(slug)?;
+    if ctx
+        .db
+        .content_asset()
+        .iter()
+        .any(|asset| asset.slug == slug && asset.id != asset_id)
+    {
+        return Err(format!("Content asset with slug '{slug}' already exists"));
+    }
     let status = clean_asset_status(status)?;
     let render_format = clean_asset_format(render_format)?;
     let collision_format = clean_asset_format(collision_format)?;

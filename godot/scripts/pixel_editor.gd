@@ -34,7 +34,7 @@ const PALETTE: Array[Color] = [
 
 const TILE_KIND_INDEX := 0
 const DECORATION_KIND_INDEX := 1
-const TILE_PLACEMENT_FULL := "Full Tile"
+const TILE_PLACEMENT_FULL := "Full"
 const DECORATION_PLACEMENT_FULL := "Full"
 const DECORATION_PLACEMENT_HALF := "Half Width"
 const DECORATION_PLACEMENT_QUARTER := "Quarter"
