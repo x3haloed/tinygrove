@@ -280,17 +280,44 @@ pub fn place_tile(
     let plot = require_plot(ctx)?;
 
     if !within_place_radius(&position, target.0, target.1) {
+        let dx = target.0 - position.x;
+        let dy = target.1 - position.y;
+        let dist_sq = dx * dx + dy * dy;
         return Err(format!(
-            "You can only place within {MAX_PLACE_RADIUS} world units of your current position"
+            "Too far away — placement target is {} world units from your position (max: {})",
+            (dist_sq as f64).sqrt() as i32,
+            MAX_PLACE_RADIUS
         ));
     }
 
     if !plot_contains(&plot, target.0, target.1) {
-        return Err("You can only place tiles inside your plot".to_string());
+        return Err(format!(
+            "Placement target ({}, {}) is outside your plot (origin: {}, {}; size: {}x{})",
+            target.0, target.1, plot.origin_x, plot.origin_y, plot.width, plot.height
+        ));
+    }
+
+    if !plot_contains_footprint(
+        &plot,
+        target.0,
+        target.1,
+        asset.placement_w,
+        asset.placement_h,
+        asset.anchor_x,
+        asset.anchor_y,
+        asset.grid_divisor,
+    ) {
+        return Err(format!(
+            "Footprint doesn't fit — the {}x{} placement at ({}, {}) would extend past the plot edge",
+            asset.placement_w, asset.placement_h, target.0, target.1
+        ));
     }
 
     if ctx.db.world_tile().iter().any(|tile| tile.x == target.0 && tile.y == target.1) {
-        return Err("There is already a tile there".to_string());
+        return Err(format!(
+            "There is already a tile at ({}, {})",
+            target.0, target.1
+        ));
     }
 
     ctx.db.world_tile().insert(WorldTile {
@@ -606,6 +633,41 @@ fn plot_contains(plot: &PlayerPlot, x: i32, y: i32) -> bool {
         && x < plot.origin_x + plot.width
         && y >= plot.origin_y
         && y < plot.origin_y + plot.height
+}
+
+/// Check whether the full footprint of an asset fits within the plot boundary.
+/// `placement_w` and `placement_h` are in grid units; we convert to world units
+/// using the same factor the server uses for tile sizes: MOVE_STEP / grid_divisor.
+/// The anchor offsets (in grid units) shift the bounding box relative to the
+/// target point, which the client sends as the center of the placement cell.
+fn plot_contains_footprint(
+    plot: &PlayerPlot,
+    target_x: i32,
+    target_y: i32,
+    placement_w: i32,
+    placement_h: i32,
+    anchor_x: i32,
+    anchor_y: i32,
+    grid_divisor: i32,
+) -> bool {
+    // Convert grid-unit dimensions to world units.
+    // Each grid unit = MOVE_STEP / grid_divisor world units.
+    let world_per_grid = MOVE_STEP / grid_divisor;
+    let half_w = placement_w * world_per_grid / 2;
+    let half_h = placement_h * world_per_grid / 2;
+    // Anchor is in grid units relative to the top-left of the bounding box.
+    // A positive anchor shifts the visual right/down, so the bounding box
+    // top-left corner moves opposite to the anchor.
+    let anchor_world_x = anchor_x * world_per_grid;
+    let anchor_world_y = anchor_y * world_per_grid;
+    let left = target_x - half_w - anchor_world_x;
+    let top = target_y - half_h - anchor_world_y;
+    let right = left + placement_w * world_per_grid;
+    let bottom = top + placement_h * world_per_grid;
+    left >= plot.origin_x
+        && top >= plot.origin_y
+        && right <= plot.origin_x + plot.width
+        && bottom <= plot.origin_y + plot.height
 }
 
 fn within_place_radius(position: &PlayerPosition, x: i32, y: i32) -> bool {
