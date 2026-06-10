@@ -33,9 +33,14 @@ const AGENT_MAX_SCREENSHOT_MAX := Vector2i(1920, 1080)
 const PLACE_RADIUS_TILES := 8
 const PLACE_RADIUS_PIXELS := TILE_SIZE * PLACE_RADIUS_TILES
 const PLACE_PREVIEW_SNAP := TILE_SIZE
+const DEFAULT_SERVER_URI := "http://127.0.0.1:3000"
+const DEFAULT_DATABASE_NAME := "tinygrove-dev"
 
 @onready var world: Node2D = $World
 @onready var status_label: Label = $Hud/VBox/Status
+@onready var server_edit: LineEdit = $Hud/VBox/ServerRow/ServerEdit
+@onready var database_edit: LineEdit = $Hud/VBox/ServerRow/DatabaseEdit
+@onready var connect_button: Button = $Hud/VBox/ServerRow/ConnectButton
 @onready var name_edit: LineEdit = $Hud/VBox/NameRow/NameEdit
 @onready var join_button: Button = $Hud/VBox/NameRow/JoinButton
 @onready var recent_label: Label = $Hud/VBox/Recent
@@ -83,6 +88,8 @@ var smoke_message := ""
 var smoke_dx := 0
 var smoke_dy := 0
 var smoke_object_kind := ""
+var server_uri := DEFAULT_SERVER_URI
+var database_name := DEFAULT_DATABASE_NAME
 var agent_server := TCPServer.new()
 var agent_connections: Array[Dictionary] = []
 var agent_http_status := ""
@@ -113,6 +120,9 @@ func _ready() -> void:
 	plots.z_index = -900
 	world.add_child(plots)
 	_style_ui()
+	connect_button.pressed.connect(_connect_to_server)
+	server_edit.text_submitted.connect(func(_text: String) -> void: _connect_to_server())
+	database_edit.text_submitted.connect(func(_text: String) -> void: _connect_to_server())
 	join_button.pressed.connect(_join_game)
 	send_button.pressed.connect(_send_chat)
 	library_close_button.pressed.connect(_close_library)
@@ -131,11 +141,12 @@ func _ready() -> void:
 	chat_edit.text_submitted.connect(func(_text: String) -> void: _send_chat())
 	_load_smoke_config()
 	_load_agent_config()
+	_load_server_config()
 	if not ClassDB.class_exists("TinyGroveClient"):
 		GDExtensionManager.load_extension("res://tinygrove_client.gdextension")
 	client = ClassDB.instantiate("TinyGroveClient")
 	if client != null:
-		client.connect_local_with_profile(agent_profile)
+		_connect_to_server()
 	_start_agent_http()
 	
 	var editor_scene := preload("res://scenes/pixel_editor.tscn")
@@ -245,6 +256,55 @@ func _notification(what: int) -> void:
 func _join_game() -> void:
 	var color := Color.from_hsv(randf(), 0.58, 0.9).to_rgba32()
 	client.join_game(name_edit.text, color)
+
+func _connect_to_server() -> void:
+	server_uri = _configured_server_uri()
+	database_name = _configured_database_name()
+	server_edit.text = server_uri
+	database_edit.text = database_name
+	_clear_replicated_state()
+	if client != null:
+		client.connect_to_with_profile(server_uri, database_name, agent_profile)
+
+func _configured_server_uri() -> String:
+	var uri := server_edit.text.strip_edges()
+	if uri.is_empty():
+		uri = server_uri
+	if uri.is_empty():
+		uri = DEFAULT_SERVER_URI
+	return uri
+
+func _configured_database_name() -> String:
+	var db_name := database_edit.text.strip_edges()
+	if db_name.is_empty():
+		db_name = database_name
+	if db_name.is_empty():
+		db_name = DEFAULT_DATABASE_NAME
+	return db_name
+
+func _clear_replicated_state() -> void:
+	local_identity = ""
+	camera_initialized = false
+	latest_chat_by_sender.clear()
+	chat_messages_seen.clear()
+	chat_bubbles_by_sender.clear()
+	content_assets_by_kind.clear()
+	content_asset_textures.clear()
+	content_asset_preview_textures.clear()
+	for avatar in avatars.values():
+		if is_instance_valid(avatar):
+			avatar.queue_free()
+	avatars.clear()
+	for tile in world_tiles.values():
+		if is_instance_valid(tile):
+			tile.queue_free()
+	world_tiles.clear()
+	player_plots.clear()
+	agent_player_state.clear()
+	agent_object_state.clear()
+	agent_plot_state.clear()
+	agent_seen_chat_ids.clear()
+	agent_baseline_ready = false
 
 func _send_chat() -> void:
 	var body := chat_edit.text.strip_edges()
@@ -538,6 +598,7 @@ func _update_status() -> void:
 		text += " | " + _short_error(error)
 	if place_mode:
 		text += " | placing %s %s within %d tiles" % [place_layer, place_kind, PLACE_RADIUS_TILES]
+	text += " | %s/%s" % [database_name, server_uri]
 	status_label.text = text
 
 func _update_world() -> void:
@@ -843,7 +904,9 @@ func _style_ui() -> void:
 	recent_label.add_theme_color_override("font_color", Color(0.78, 0.94, 0.82))
 
 func _short_error(error: String) -> String:
-	var compact := error.replace("Connection with ws://127.0.0.1:3000/v1/database/tinygrove-dev/subscribe?compression=Brotli IO error: ", "")
+	var compact := error
+	compact = compact.replace("Connection with ws://127.0.0.1:3000/v1/database/tinygrove-dev/subscribe?compression=Brotli IO error: ", "")
+	compact = compact.replace("Connection with %s/v1/database/%s/subscribe?compression=Brotli IO error: " % [server_uri.replace("http://", "ws://").replace("https://", "wss://"), database_name], "")
 	if compact.length() > STATUS_MAX_CHARS:
 		return compact.substr(0, STATUS_MAX_CHARS - 3) + "..."
 	return compact
@@ -871,6 +934,20 @@ func _load_agent_config() -> void:
 	agent_profile = OS.get_environment("TINYGROVE_AGENT_PROFILE").strip_edges()
 	if agent_profile.is_empty():
 		agent_profile = "human"
+
+func _load_server_config() -> void:
+	server_uri = OS.get_environment("TINYGROVE_SERVER_URI").strip_edges()
+	if server_uri.is_empty():
+		server_uri = OS.get_environment("TINYGROVE_SERVER_URL").strip_edges()
+	if server_uri.is_empty():
+		server_uri = DEFAULT_SERVER_URI
+
+	database_name = OS.get_environment("TINYGROVE_DATABASE_NAME").strip_edges()
+	if database_name.is_empty():
+		database_name = DEFAULT_DATABASE_NAME
+
+	server_edit.text = server_uri
+	database_edit.text = database_name
 
 func _poll_agent_http() -> void:
 	if agent_server.is_listening():
@@ -1207,6 +1284,8 @@ func _agent_snapshot(advance_cursor := false) -> Dictionary:
 			"agent_profile": agent_profile,
 			"agent_base_url": _agent_base_url(),
 			"agent_registry_path": agent_registry_path,
+			"server_uri": server_uri,
+			"database_name": database_name,
 		},
 		"you": _agent_you_dictionary(local_avatar),
 		"placement": placement,
@@ -2003,6 +2082,8 @@ func _write_agent_registry() -> void:
 		"logged_in": _agent_is_logged_in(),
 		"connected": client != null and bool(client.call("is_connected")),
 		"status": client.status() if client != null else "client not ready",
+		"server_uri": server_uri,
+		"database_name": database_name,
 		"updated_unix": Time.get_unix_time_from_system(),
 	}
 	var file := FileAccess.open(agent_registry_path, FileAccess.WRITE)
@@ -2086,6 +2167,8 @@ func _agent_delta_response(since: int, advance_cursor := true) -> Dictionary:
 			"last_error": client.last_error() if client != null else "",
 			"agent_base_url": _agent_base_url(),
 			"agent_profile": agent_profile,
+			"server_uri": server_uri,
+			"database_name": database_name,
 		},
 		"delta": _agent_delta_payload(since, advance_cursor),
 	}

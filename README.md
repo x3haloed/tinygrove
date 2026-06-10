@@ -53,9 +53,15 @@ cargo xtask db build
 cargo xtask client build
 cargo xtask db describe
 cargo xtask smoke two-clients
+cargo xtask test-server start
+cargo xtask test-server publish --confirm-durable-test
 ```
 
 `cargo xtask dev` publishes the module, regenerates bindings, and launches Godot. It assumes a local SpacetimeDB server is already running.
+
+The normal `db` commands target throwaway local development. The `test-server` commands target a durable testing database named `tinygrove-test`, listen on all network interfaces, and publish without deleting existing data. Durable publishes require the explicit `--confirm-durable-test` flag.
+
+The Godot client has editable server fields in the HUD. Use `http://127.0.0.1:3000` with `tinygrove-dev` for local development, or the host machine's LAN/internet address with `tinygrove-test` for the durable testing server. The same defaults can be set before launch with `TINYGROVE_SERVER_URI` and `TINYGROVE_DATABASE_NAME`.
 
 ## Current Server Slice
 

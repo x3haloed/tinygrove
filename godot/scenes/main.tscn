@@ -18,8 +18,8 @@ layout_mode = 1
 anchors_preset = 0
 offset_left = 12.0
 offset_top = 10.0
-offset_right = 294.0
-offset_bottom = 84.0
+offset_right = 560.0
+offset_bottom = 116.0
 
 [node name="VBox" type="VBoxContainer" parent="Hud"]
 layout_mode = 2
@@ -27,6 +27,25 @@ layout_mode = 2
 [node name="Status" type="Label" parent="Hud/VBox"]
 layout_mode = 2
 text = "Disconnected"
+
+[node name="ServerRow" type="HBoxContainer" parent="Hud/VBox"]
+layout_mode = 2
+
+[node name="ServerEdit" type="LineEdit" parent="Hud/VBox/ServerRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "http://127.0.0.1:3000"
+placeholder_text = "Server URL"
+
+[node name="DatabaseEdit" type="LineEdit" parent="Hud/VBox/ServerRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 0)
+text = "tinygrove-dev"
+placeholder_text = "Database"
+
+[node name="ConnectButton" type="Button" parent="Hud/VBox/ServerRow"]
+layout_mode = 2
+text = "Connect"
 
 [node name="NameRow" type="HBoxContainer" parent="Hud/VBox"]
 layout_mode = 2

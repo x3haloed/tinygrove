@@ -19,10 +19,36 @@ cargo xtask dev
 cargo xtask client build
 cargo xtask db describe
 cargo xtask smoke two-clients
+cargo xtask test-server start
+cargo xtask test-server publish --confirm-durable-test
 ```
 
 `cargo xtask dev` assumes a local SpacetimeDB server is already running. Start
 one in a separate terminal with `cargo xtask db start`.
+
+## Durable Test Server
+
+Use the durable test server when multiple machines should connect to the same long-lived testing world.
+
+```sh
+cargo xtask test-server start
+```
+
+This starts SpacetimeDB on `0.0.0.0:3000` with data in `.spacetime-test-data/` and database name `tinygrove-test`. Clients on the LAN can connect to `http://<host-lan-ip>:3000`; wider internet access depends on router/firewall port forwarding.
+
+Publish durable updates with:
+
+```sh
+cargo xtask test-server publish --confirm-durable-test
+```
+
+Durable publishes run `cargo xtask check` first and do not pass the destructive local-dev delete-data option. Use additive schema changes and explicit migrations for this environment. The regular `cargo xtask db publish` command remains the fast destructive path for `tinygrove-dev`.
+
+The Godot HUD includes server URL and database fields plus a Connect button. The same values can be provided before launch:
+
+```sh
+TINYGROVE_SERVER_URI=http://192.168.1.42:3000 TINYGROVE_DATABASE_NAME=tinygrove-test cargo xtask godot run
+```
 
 The first multiplayer slice is intentionally small:
 

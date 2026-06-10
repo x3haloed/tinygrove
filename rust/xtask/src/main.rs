@@ -9,6 +9,9 @@ use std::{
 
 const DB_NAME: &str = "tinygrove-dev";
 const SPACETIME_LISTEN_ADDR: &str = "127.0.0.1:3000";
+const TEST_DB_NAME: &str = "tinygrove-test";
+const TEST_SPACETIME_LISTEN_ADDR: &str = "0.0.0.0:3000";
+const TEST_CONFIRM_FLAG: &str = "--confirm-durable-test";
 
 fn main() -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -29,6 +32,15 @@ fn main() -> ExitCode {
         [cmd, subcmd] if cmd == "db" && subcmd == "publish" => db_publish(),
         [cmd, subcmd] if cmd == "db" && subcmd == "generate" => db_generate(),
         [cmd, subcmd] if cmd == "db" && subcmd == "describe" => db_describe(),
+        [cmd, subcmd] if cmd == "test-server" && subcmd == "start" => test_server_start(),
+        [cmd, subcmd] if cmd == "test-server" && subcmd == "status" => test_server_status(),
+        [cmd, subcmd] if cmd == "test-server" && subcmd == "describe" => test_server_describe(),
+        [cmd, subcmd, flag] if cmd == "test-server" && subcmd == "publish" => {
+            test_server_publish(flag)
+        }
+        [cmd, subcmd] if cmd == "test-server" && subcmd == "publish" => Err(format!(
+            "durable test publish requires {TEST_CONFIRM_FLAG}; this command preserves existing data and should be intentional"
+        )),
         [cmd, subcmd] if cmd == "client" && subcmd == "build" => client_build(),
         [cmd, subcmd] if cmd == "godot" && subcmd == "run" => godot_run(),
         [cmd, subcmd] if cmd == "smoke" && subcmd == "two-clients" => smoke_two_clients(),
@@ -61,6 +73,14 @@ Commands:
   db publish    Publish the module to local database {DB_NAME}
   db generate   Generate Rust client bindings into rust/client/generated
   db describe   Describe the local database schema
+  test-server start
+                Start a durable SpacetimeDB server on {TEST_SPACETIME_LISTEN_ADDR}
+  test-server status
+                Check whether the durable test database {TEST_DB_NAME} is reachable
+  test-server describe
+                Describe the durable test database schema
+  test-server publish {TEST_CONFIRM_FLAG}
+                Publish to durable test database {TEST_DB_NAME} without deleting data
   client build  Build and stage the Godot Rust extension
   godot run     Launch the Godot project
   smoke two-clients
@@ -149,6 +169,83 @@ fn db_describe() -> Result<(), String> {
     run(
         "spacetime",
         ["describe", DB_NAME, "--server", "local", "--json"],
+        repo_dir(),
+    )
+}
+
+fn test_server_start() -> Result<(), String> {
+    exec(
+        "spacetime",
+        [
+            "start",
+            "--listen-addr",
+            TEST_SPACETIME_LISTEN_ADDR,
+            "--data-dir",
+            ".spacetime-test-data",
+        ],
+        repo_dir(),
+    )
+}
+
+fn test_server_status() -> Result<(), String> {
+    println!("durable test server target:");
+    println!("  listen addr: {TEST_SPACETIME_LISTEN_ADDR}");
+    println!("  database:    {TEST_DB_NAME}");
+    println!("  data dir:    .spacetime-test-data");
+    run(
+        "spacetime",
+        [
+            "describe",
+            TEST_DB_NAME,
+            "--server",
+            "local",
+            "--json",
+            "--no-config",
+        ],
+        repo_dir(),
+    )
+}
+
+fn test_server_describe() -> Result<(), String> {
+    run(
+        "spacetime",
+        [
+            "describe",
+            TEST_DB_NAME,
+            "--server",
+            "local",
+            "--json",
+            "--no-config",
+        ],
+        repo_dir(),
+    )
+}
+
+fn test_server_publish(flag: &str) -> Result<(), String> {
+    if flag != TEST_CONFIRM_FLAG {
+        return Err(format!(
+            "durable test publish requires exactly {TEST_CONFIRM_FLAG}, got `{flag}`"
+        ));
+    }
+
+    println!("publishing durable test server update");
+    println!("  database:    {TEST_DB_NAME}");
+    println!("  server:      local SpacetimeDB at {TEST_SPACETIME_LISTEN_ADDR}");
+    println!("  data policy: preserve existing data");
+    println!("  destructive publish: disabled");
+    check()?;
+    run(
+        "spacetime",
+        [
+            "publish",
+            TEST_DB_NAME,
+            "--server",
+            "local",
+            "--module-path",
+            "rust/server",
+            "--no-config",
+            "--yes",
+        ],
         repo_dir(),
     )
 }
@@ -251,7 +348,9 @@ fn smoke_two_clients() -> Result<(), String> {
         require_contains(&objects, "flower", "world tile query")?;
         require_contains(&objects, "button", "world tile query")?;
 
-        println!("smoke two-clients: replicated players, plots, positions, chat, and world objects");
+        println!(
+            "smoke two-clients: replicated players, plots, positions, chat, and world objects"
+        );
         Ok(())
     })();
 

@@ -21,7 +21,9 @@ Prefer a registry entry whose `profile` is `agent`. Use its `base_url` for reque
 http://127.0.0.1:37373
 ```
 
-The Godot client must be running. For multiplayer state, the Tiny Grove SpacetimeDB dev server must also be running and the client must be connected. A client launched with `TINYGROVE_AGENT_PROFILE=agent` identifies itself as an agent-controlled instance and uses agent-specific SpacetimeDB credentials so it does not inherit the human player's local identity. `TINYGROVE_AGENT_NAME` sets the default login name, and `TINYGROVE_AGENT_PORT` pins the loopback port when a harness needs a known address. Without an explicit port, clients scan upward from `37373` to avoid collisions.
+The Godot client must be running. For multiplayer state, a Tiny Grove SpacetimeDB server must also be running and the client must be connected. The client HUD has editable server URL and database fields, and launches can prefill them with `TINYGROVE_SERVER_URI` and `TINYGROVE_DATABASE_NAME`. Use `http://127.0.0.1:3000` plus `tinygrove-dev` for local development, or the durable test host URL plus `tinygrove-test` for shared testing.
+
+A client launched with `TINYGROVE_AGENT_PROFILE=agent` identifies itself as an agent-controlled instance and uses agent-specific SpacetimeDB credentials so it does not inherit the human player's local identity. `TINYGROVE_AGENT_NAME` sets the default login name, and `TINYGROVE_AGENT_PORT` pins the loopback port when a harness needs a known address. Without an explicit port, clients scan upward from `37373` to avoid collisions. Registry entries and snapshot connection blocks include `server_uri` and `database_name`; prefer those fields when deciding which world the client is observing.
 
 ## First Move
 
@@ -43,7 +45,7 @@ Then wait a moment and request `/snapshot` again. Calling `/login` while already
 
 ## Endpoints
 
-- `GET /snapshot`: returns a JSON text snapshot constrained to the current camera view. It includes connection status, who you are, visible players, active chat bubbles, visible player plots, visible objects, visible tiles, and placement radius details. It groups repetitive lower-priority objects after the individual object list becomes large.
+- `GET /snapshot`: returns a JSON text snapshot constrained to the current camera view. It includes connection status, selected server URI/database, who you are, visible players, active chat bubbles, visible player plots, visible objects, visible tiles, and placement radius details. It groups repetitive lower-priority objects after the individual object list becomes large.
 - `GET /delta`: returns camera-scoped text events since your last look. It advances your cursor by default. Pass `?since=<cursor>` to ask from a specific cursor.
 - `POST /login`: joins the game through the Godot client. The JSON body may include `display_name`; if omitted, the default is `Agent`.
 - `POST /move`: moves like a human directional input, but accepts an agent-friendly `steps` count. Example: `{"direction":"east","steps":3}`. Directions include `north`, `south`, `east`, `west`, plus `up`, `down`, `left`, and `right`.

@@ -85,6 +85,7 @@ Cargo.lock
 
 # Local SpacetimeDB development data
 .spacetime-data/
+.spacetime-test-data/
 .tinygrove/
 godot/bin/
 
