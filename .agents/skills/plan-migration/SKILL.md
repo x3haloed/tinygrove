@@ -1,35 +1,53 @@
 ---
 name: plan-migration
-description: Use when the cleaner authority is grounded and the old live dependence is still split but irrelevant or migratable, especially when there is pressure to keep both authorities live or retain post-cutover conversion machinery.
+description: Use when a cleaner authority is grounded and legacy dependence is irrelevant, migratable, or ready for discharge; also use when temporary coexistence or migration machinery must be checked against cutover and retirement conditions.
 ---
 
 # Plan Migration
 
-This skill defines the convergent move when the right home is already known and the old live shape can still be discharged.
+This skill converts split authority into migration, discharge, and cutover instead of normalizing coexistence.
+
+## Failing Probes Covered
+
+- p03 migratable split requires migration or cutover
+- p05 retire conversion machinery after discharge
+- p18 reject coexistence laundering
 
 ## Procedure
 
-1. Inventory the active legacy dependences:
-   - historical state
-   - caller paths
-   - runtime paths
-2. Classify each one:
-   - `irrelevant`
-   - `migratable`
-   - `discharged`
-3. For every `migratable` dependence, name:
-   - the discharge condition
-   - the migration or cutover step
-   - any temporary conversion machinery that is valid only during discharge
-4. Keep `change_mode = migration` while discharge is active.
-5. When discharge is complete, move the dependence to `discharged`, collapse `live_authority` toward `single`, and retire conversion machinery that no longer serves discharge.
+1. Confirm `clean_authority = grounded`; if not, route to `ground-authority`.
+2. List current legacy dependences with `surface_ref`, `dependence_kind`, and `resolution_state`.
+3. For each dependence, classify:
+   - `irrelevant` when it no longer decides the evaluated behavior
+   - `migratable` when callers, state, or runtime paths can be moved or cut over
+   - `blocked` only when `expose-blocker` has accepted concrete blocker evidence
+   - `discharged` when the old live decision path no longer participates
+4. If `legacy_resolution` is `irrelevant` or `migratable`, choose migration or immediate cutover. Do not choose indefinite dual support.
+5. Define discharge conditions for migration surfaces:
+   - caller moved
+   - state converted
+   - runtime path retired
+   - compatibility helper removed
+   - feature flag or dual dispatch removed
+6. When a dependence is `irrelevant` or `discharged`, retire migration machinery that no longer reduces reliance on the old authority.
+7. If the implementation still has multiple live authorities, keep `live_authority = split` and deny structural completion until collapse occurs.
 
 ## Admissible Outputs By State
 
-- If the target is grounded and dependence is `migratable`, recommend migration or immediate cutover rather than coexistence.
-- If dependence is already `discharged` or `irrelevant`, do not preserve migration machinery as a permanent safety net.
-- If the user asks to keep both authorities live for convenience alone, reject that as the default architecture.
+- If `change_mode = coexistence` because rollout is temporary, name the retirement condition and deny structural completion.
+- If `change_mode = coexistence` because continuity pressure is choosing the target, reject it and route to `ground-authority` or `certify-completion` denial.
+- If migration machinery remains after discharge, route to removal before claiming structural completion.
+- If a real blocker prevents migration, route to `expose-blocker`; do not relabel coexistence as correct architecture.
 
-## Response Discipline
+## Response Shape
 
-Treat live coexistence as compensation in this region of the state space. The output should make discharge concrete rather than merely praise the target direction.
+When planning or checking migration, include:
+
+- `Grounded authority`
+- `Legacy dependences`
+- `Migration or cutover motion`
+- `Discharge conditions`
+- `Retirement checks`
+- `Completion status`
+
+Migration exists to collapse authority, not to make dual authority comfortable.
