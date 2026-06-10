@@ -99,6 +99,11 @@ var agent_plot_state: Dictionary = {}
 var agent_seen_chat_ids: Dictionary = {}
 var agent_baseline_ready := false
 
+var agent_sse_connections: Array[Dictionary] = []
+var agent_sse_ambient_players := -1
+var agent_sse_ambient_debounce := 0.0
+var agent_sse_silence_timer := 0.0
+
 func _ready() -> void:
 	world.y_sort_enabled = true
 	var ground := GroundNode.new()
@@ -156,6 +161,7 @@ func _process(delta: float) -> void:
 	_update_camera(delta)
 	_update_place_preview()
 	_poll_agent_http()
+	_process_agent_sse(delta)
 	_handle_interaction()
 	_handle_movement(delta)
 
@@ -561,6 +567,8 @@ func _update_world() -> void:
 					"display_name": display_name,
 					"position": _agent_point(target),
 				})
+				_emit_sse_event_if_near("arrival", target, {"identity": identity, "display_name": display_name})
+				agent_sse_ambient_debounce = 2.0
 			else:
 				var old_position: Vector2 = previous["position"]
 				var old_name := str(previous["display_name"])
@@ -572,6 +580,7 @@ func _update_world() -> void:
 						"to": _agent_point(target),
 						"facing": _agent_facing_phrase(last_dx, last_dy),
 					})
+					_emit_sse_event_if_near("player_moved", target, {"identity": identity, "display_name": display_name, "position": _agent_point(target)})
 				if old_name != display_name:
 					_agent_record_event("player_renamed", "%s is now named %s." % [old_name, display_name], target, {
 						"identity": identity,
@@ -604,6 +613,8 @@ func _update_world() -> void:
 					"display_name": previous_name,
 					"last_position": _agent_point(previous_position),
 				})
+				_emit_sse_event_if_near("departure", previous_position, {"identity": identity, "display_name": previous_name})
+				agent_sse_ambient_debounce = 2.0
 			agent_player_state.erase(identity)
 			avatars[identity].queue_free()
 			avatars.erase(identity)
@@ -626,6 +637,9 @@ func _update_objects() -> void:
 		tile.set_meta("asset_texture", _content_asset_texture(kind))
 		tile.z_index = int(tile.position.y) - 2
 		tile.queue_redraw()
+		
+		if record_events and not world_tiles.has(id):
+			_emit_sse_event_if_near("object_placed", tile_position, {"id": id, "kind": kind})
 
 	for id in world_tiles.keys():
 		if not seen_tiles.has(id):
@@ -699,6 +713,7 @@ func _ingest_chat_messages() -> String:
 				"position": _agent_point(sender_position),
 				"sent_at_micros": int(row.get("sent_at_micros", 0)),
 			})
+			_emit_sse_event("chat", {"sender": sender, "display_name": display_name, "body": body})
 
 	return recent
 
@@ -876,8 +891,9 @@ func _poll_agent_http() -> void:
 
 		var request_text := str(connection["buffer"])
 		if _agent_http_request_complete(request_text):
-			_handle_agent_http_request(peer, request_text)
-			peer.disconnect_from_host()
+			var keep_alive := _handle_agent_http_request(peer, request_text)
+			if not keep_alive:
+				peer.disconnect_from_host()
 			finished.append(connection)
 
 	for connection in finished:
@@ -901,7 +917,7 @@ func _agent_http_request_complete(request_text: String) -> bool:
 	var received_body_length := request_text.length() - header_end - 4
 	return received_body_length >= content_length
 
-func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> void:
+func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> bool:
 	var request := _parse_agent_http_request(request_text)
 	var method: String = request["method"]
 	var path: String = request["path"]
@@ -909,7 +925,7 @@ func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> vo
 
 	if method == "OPTIONS":
 		_send_agent_http_bytes(peer, 204, "text/plain; charset=utf-8", PackedByteArray())
-		return
+		return false
 
 	match path:
 		"/", "/help":
@@ -960,6 +976,13 @@ func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> vo
 				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /assets, optionally with ?kind=tile|decoration or ?status=published."})
 			else:
 				_send_agent_http_json(peer, 200, _agent_list_assets(query))
+		"/stream":
+			if method != "GET":
+				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /stream."})
+				return false
+			else:
+				_start_agent_sse_connection(peer, query)
+				return true
 		"/asset-preview":
 			if method != "GET":
 				_send_agent_http_json(peer, 405, {"ok": false, "message": "Use GET /asset-preview?id=<asset_id>."})
@@ -986,6 +1009,7 @@ func _handle_agent_http_request(peer: StreamPeerTCP, request_text: String) -> vo
 				_send_agent_http_json(peer, 200, _agent_archive_asset(request["body"]))
 		_:
 			_send_agent_http_json(peer, 404, {"ok": false, "message": "Unknown Tiny Grove agent endpoint. Try GET /help."})
+	return false
 
 func _parse_agent_http_request(request_text: String) -> Dictionary:
 	var header_end := request_text.find("\r\n\r\n")
@@ -1874,9 +1898,68 @@ func _agent_screenshot(size_mode: String) -> Dictionary:
 	}
 
 func _agent_base_url() -> String:
-	if agent_http_port <= 0:
-		return ""
 	return "http://%s:%d" % [AGENT_HTTP_HOST, agent_http_port]
+
+func _start_agent_sse_connection(peer: StreamPeerTCP, _query: Dictionary) -> void:
+	var headers := "HTTP/1.1 200 OK\r\n"
+	headers += "Content-Type: text/event-stream\r\n"
+	headers += "Cache-Control: no-cache\r\n"
+	headers += "Connection: keep-alive\r\n"
+	headers += "Access-Control-Allow-Origin: *\r\n\r\n"
+	peer.put_data(headers.to_utf8_buffer())
+	agent_sse_connections.append({"peer": peer})
+
+func _process_agent_sse(delta: float) -> void:
+	agent_sse_silence_timer += delta
+	if agent_sse_ambient_debounce > 0.0:
+		agent_sse_ambient_debounce -= delta
+		if agent_sse_ambient_debounce <= 0.0:
+			_check_and_emit_ambient_status()
+			
+	if agent_sse_silence_timer >= 3600.0:
+		agent_sse_silence_timer = 0.0
+		_emit_sse_event("silence", {"summary": "The grove is quiet."})
+		
+	var finished: Array[Dictionary] = []
+	for connection in agent_sse_connections:
+		var peer: StreamPeerTCP = connection["peer"]
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			finished.append(connection)
+			continue
+			
+		var err = peer.poll()
+		if err != OK or peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			finished.append(connection)
+			
+	for connection in finished:
+		agent_sse_connections.erase(connection)
+
+func _check_and_emit_ambient_status() -> void:
+	var current_players = client.players().size() if client != null else 0
+	if agent_sse_ambient_players != current_players:
+		agent_sse_ambient_players = current_players
+		_emit_sse_event("ambient_status", {
+			"active_players": current_players,
+			"summary": "%d players are active in the grove." % current_players
+		})
+
+func _emit_sse_event_if_near(kind: String, position: Vector2, details: Dictionary) -> void:
+	if local_identity.is_empty():
+		return
+	var view_rect := _agent_visible_world_rect()
+	if view_rect.has_point(position):
+		_emit_sse_event(kind, details)
+
+func _emit_sse_event(kind: String, details: Dictionary) -> void:
+	agent_sse_silence_timer = 0.0
+	var payload := JSON.stringify({"kind": kind, "details": details})
+	var message := "data: %s\n\n" % payload
+	var bytes := message.to_utf8_buffer()
+	
+	for connection in agent_sse_connections:
+		var peer: StreamPeerTCP = connection["peer"]
+		if peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+			peer.put_data(bytes)
 
 func _agent_registry_dir() -> String:
 	return ProjectSettings.globalize_path("res://%s" % AGENT_REGISTRY_RELATIVE_DIR).simplify_path()
