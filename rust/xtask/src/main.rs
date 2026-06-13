@@ -666,10 +666,10 @@ fn smoke_two_clients() -> Result<(), String> {
         require_contains(&players, "Moss", "player query")?;
 
         let positions = sql("SELECT * FROM player_position")?;
-        require_contains(&positions, "-112", "position query")?;
+        require_contains(&positions, "-368", "position query")?;
 
         let plots = sql("SELECT * FROM player_plot")?;
-        require_contains(&plots, "128", "player plot query")?;
+        require_contains(&plots, "640", "player plot query")?;
 
         let chat = sql("SELECT * FROM chat_message")?;
         require_contains(&chat, "hello from Grove", "chat query")?;
