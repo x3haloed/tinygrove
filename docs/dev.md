@@ -50,6 +50,15 @@ The Godot HUD includes server URL and database fields plus a Connect button. The
 TINYGROVE_SERVER_URI=http://192.168.1.42:3000 TINYGROVE_DATABASE_NAME=tinygrove-test cargo xtask godot run
 ```
 
+For agent-owned clients, prefer the `xtask` agent commands. They default to the durable test database and auto-select a free loopback port:
+
+```sh
+cargo xtask agent spawn --name Aster
+cargo xtask agent list
+```
+
+Use `--server-uri http://<host-lan-ip>:3000` when the test server is on another machine. Use `agent run` instead of `agent spawn` when you want Godot attached to the current terminal.
+
 The first multiplayer slice is intentionally small:
 
 - SpacetimeDB owns player identity, position, chat, and client protocol checks.
@@ -63,5 +72,6 @@ Future Watch integration:
 
 - Watch lives at `/Users/chad/Repos/watch`.
 - Watch agents perceive through subscribed Sounding streams and optional media attachments.
-- Tiny Grove should eventually expose a structured game-state stream plus semantic action tools/commands for join, move, chat, inspect, and later world editing.
+- Tiny Grove exposes a loopback SSE stream at each registry entry's `stream_url`; Watch can subscribe to that URL through `sseStreams`.
+- Tiny Grove should keep semantic action tools/commands for join, move, chat, inspect, and later world editing in parity with the human client.
 - Visual snapshots should be optional media references for image-capable models, not the only source of state.

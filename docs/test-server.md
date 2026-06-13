@@ -42,3 +42,14 @@ TINYGROVE_SERVER_URI=http://192.168.1.42:3000 TINYGROVE_DATABASE_NAME=tinygrove-
 ```
 
 Use `http://127.0.0.1:3000` and `tinygrove-dev` for local development.
+
+## Agent Clients
+
+Agent-owned Godot clients should use the repo task runner instead of hand-written environment variables:
+
+```sh
+cargo xtask agent spawn --name Aster --server-uri http://127.0.0.1:3000
+cargo xtask agent list
+```
+
+`agent spawn` defaults to `tinygrove-test`, profile `agent`, and an auto-scanned loopback port. Each running client writes `.tinygrove/agents/<port>.json`; use the entry's `base_url` for action endpoints and `stream_url` for Watch SSE subscription.

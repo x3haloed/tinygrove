@@ -63,6 +63,15 @@ The normal `db` commands target throwaway local development. The `test-server` c
 
 The Godot client has editable server fields in the HUD. Use `http://127.0.0.1:3000` with `tinygrove-dev` for local development, or the host machine's LAN/internet address with `tinygrove-test` for the durable testing server. The same defaults can be set before launch with `TINYGROVE_SERVER_URI` and `TINYGROVE_DATABASE_NAME`.
 
+Agent-owned clients should use the `xtask` front door instead of raw environment variables:
+
+```sh
+cargo xtask agent spawn --name Aster
+cargo xtask agent list
+```
+
+`agent run` launches in the foreground; `agent spawn` launches in the background and prints the loopback registry details. Agent commands default to `tinygrove-test` on `http://127.0.0.1:3000`, auto-scan loopback ports from `37373`, and write discovery entries under `.tinygrove/agents/`.
+
 ## Current Server Slice
 
 The SpacetimeDB module currently defines:
@@ -111,8 +120,8 @@ This keeps the game playable by humans in Godot and by agents in Watch without s
 
 Published skills for agents that play Tiny Grove live in `published-skills/`, separate from `.agents/skills` repo-authoring guidance.
 
-The first published skill is `published-skills/tinygrove-player/SKILL.md`. It documents the Godot client's loopback HTTP player interface, currently supporting login, camera-scoped text snapshots, camera-scoped deltas, the same core controls humans have, and optional screenshots. Streaming and SSE endpoints are intentionally not part of this first surface yet.
+The first published skill is `published-skills/tinygrove-player/SKILL.md`. It documents the Godot client's loopback HTTP player interface, currently supporting login, camera-scoped text snapshots, camera-scoped deltas, the same core controls humans have, optional screenshots, and an SSE stream for Watch.
 
-Each client writes a discovery file under `.tinygrove/agents/` with its profile, PID, port, login state, and base URL. Use `TINYGROVE_AGENT_PROFILE=agent` for agent-owned clients, `TINYGROVE_AGENT_NAME=Codex` to set the default login name, and `TINYGROVE_AGENT_PORT=37390` when a harness needs a pinned port. Without an explicit port, clients scan upward from `37373` to avoid local collisions. Agent and human profiles also use separate SpacetimeDB credential keys, so an agent client does not inherit the human player's local identity.
+Each client writes a discovery file under `.tinygrove/agents/` with its profile, PID, port, login state, base URL, `stream_url`, `watch_stream_name`, server URI, and database name. Prefer `cargo xtask agent run` or `cargo xtask agent spawn` for agent clients; raw `TINYGROVE_AGENT_*` variables remain available for harnesses that need explicit control. Without an explicit port, clients scan upward from `37373` to avoid local collisions. Agent and human profiles also use separate SpacetimeDB credential keys, so an agent client does not inherit the human player's local identity.
 
 Action endpoints such as `/move`, `/chat`, `/place`, and `/interact` return a bounded text delta and advance the agent's state cursor. `/place` now requires an explicit target within the placement radius, and the snapshot includes the radius in world units so agents can avoid invalid attempts. Agents can also call `/delta?since=<cursor>` to revisit recent camera-scoped events without opening a stream.

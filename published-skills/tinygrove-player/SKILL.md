@@ -15,15 +15,27 @@ Running clients publish a small discovery file in:
 .tinygrove/agents/*.json
 ```
 
-Prefer a registry entry whose `profile` is `agent`. Use its `base_url` for requests. If there is no registry yet, try the default base URL:
+Prefer a registry entry whose `profile` is `agent` and whose `database_name`, `server_uri`, and `agent_name` or `display_name` match your assignment. Use its `base_url` for action requests and `stream_url` for Watch SSE subscription. If there is no registry yet, try the default base URL:
 
 ```text
 http://127.0.0.1:37373
 ```
 
-The Godot client must be running. For multiplayer state, a Tiny Grove SpacetimeDB server must also be running and the client must be connected. The client HUD has editable server URL and database fields, and launches can prefill them with `TINYGROVE_SERVER_URI` and `TINYGROVE_DATABASE_NAME`. Use `http://127.0.0.1:3000` plus `tinygrove-dev` for local development, or the durable test host URL plus `tinygrove-test` for shared testing.
+The Godot client must be running. For multiplayer state, a Tiny Grove SpacetimeDB server must also be running and the client must be connected. Agent clients should normally be launched from the Tiny Grove repo root with:
 
-A client launched with `TINYGROVE_AGENT_PROFILE=agent` identifies itself as an agent-controlled instance and uses agent-specific SpacetimeDB credentials so it does not inherit the human player's local identity. `TINYGROVE_AGENT_NAME` sets the default login name, and `TINYGROVE_AGENT_PORT` pins the loopback port when a harness needs a known address. Without an explicit port, clients scan upward from `37373` to avoid collisions. Registry entries and snapshot connection blocks include `server_uri` and `database_name`; prefer those fields when deciding which world the client is observing.
+```sh
+cargo xtask agent spawn --name Agent
+```
+
+This defaults to `http://127.0.0.1:3000`, database `tinygrove-test`, profile `agent`, and an auto-scanned loopback port. Use `--server-uri http://<host>:3000` for a remote durable test server, `--database <name>` for a non-default database, `--port <port>` only when a harness needs a pinned loopback address, and `agent run` instead of `agent spawn` when you want Godot in the foreground. To inspect running instances:
+
+```sh
+cargo xtask agent list
+```
+
+The human Godot client still has editable server URL and database fields in the HUD. Use `http://127.0.0.1:3000` plus `tinygrove-dev` for local development, or the durable test host URL plus `tinygrove-test` for shared testing.
+
+A client launched with profile `agent` identifies itself as an agent-controlled instance and uses agent-specific SpacetimeDB credentials so it does not inherit the human player's local identity. Raw `TINYGROVE_AGENT_PROFILE`, `TINYGROVE_AGENT_NAME`, `TINYGROVE_AGENT_PORT`, `TINYGROVE_SERVER_URI`, and `TINYGROVE_DATABASE_NAME` are still supported, but prefer `cargo xtask agent ...` so the defaults stay consistent. Without an explicit port, clients scan upward from `37373` to avoid collisions. Registry entries and snapshot connection blocks include `server_uri` and `database_name`; prefer those fields when deciding which world the client is observing.
 
 ## First Move
 
@@ -68,12 +80,12 @@ Then wait a moment and request `/snapshot` again. Calling `/login` while already
 
 ## Subscribing via Watch
 
-If you are running the agent inside the **Watch** harness (`/Users/chad/Repos/watch`), you can subscribe to the SSE stream by adding it to your `config.json`'s `sseStreams` section:
+If you are running the agent inside the **Watch** harness (`/Users/chad/Repos/watch`), inspect `.tinygrove/agents/*.json` or run `cargo xtask agent list` in `/Users/chad/Repos/tinygrove`, then add the matched entry's `stream_url` to your Watch `config.json` `sseStreams` section:
 
 ```json
   "sseStreams": [
     {
-      "name": "tinygrove:stream",
+      "name": "tinygrove:agent:37373",
       "url": "http://127.0.0.1:37373/stream?waking=true",
       "subscribed": true,
       "waking": true
@@ -81,7 +93,7 @@ If you are running the agent inside the **Watch** harness (`/Users/chad/Repos/wa
   ]
 ```
 
-This configuration ensures the Watch daemon reads the stream natively in the background, buffering the peripheral events and feeding them directly into your context during Soundings. The `waking: true` config tells Watch to trigger a Sounding immediately when a waking event (such as a chat message or near player arrival) is received.
+Use the registry entry's `watch_stream_name` for the stream name when available. This configuration ensures the Watch daemon reads the stream natively in the background, buffering the peripheral events and feeding them directly into your context during Soundings. The `waking: true` config tells Watch to trigger a Sounding immediately when a waking event (such as a chat message or near player arrival) is received.
 
 Every action response includes `delta`, advances the cursor, and reports `next_since`. Treat a successful request with no visible delta as uncertain: the server may have rejected the reducer, the effect may be outside the camera, or the interaction may have no visible consequence.
 

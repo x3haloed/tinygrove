@@ -1,6 +1,7 @@
 use std::{
     env,
     ffi::OsStr,
+    fs,
     path::{Path, PathBuf},
     process::{Child, Command, ExitCode, Stdio},
     thread,
@@ -12,6 +13,9 @@ const SPACETIME_LISTEN_ADDR: &str = "127.0.0.1:3000";
 const TEST_DB_NAME: &str = "tinygrove-test";
 const TEST_SPACETIME_LISTEN_ADDR: &str = "0.0.0.0:3000";
 const TEST_CONFIRM_FLAG: &str = "--confirm-durable-test";
+const DEFAULT_AGENT_NAME: &str = "Agent";
+const DEFAULT_AGENT_PROFILE: &str = "agent";
+const DEFAULT_AGENT_SERVER_URI: &str = "http://127.0.0.1:3000";
 
 fn main() -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -41,6 +45,9 @@ fn main() -> ExitCode {
         [cmd, subcmd] if cmd == "test-server" && subcmd == "publish" => Err(format!(
             "durable test publish requires {TEST_CONFIRM_FLAG}; this command preserves existing data and should be intentional"
         )),
+        [cmd, subcmd] if cmd == "agent" && subcmd == "list" => agent_list(),
+        [cmd, subcmd, rest @ ..] if cmd == "agent" && subcmd == "run" => agent_run(rest),
+        [cmd, subcmd, rest @ ..] if cmd == "agent" && subcmd == "spawn" => agent_spawn(rest),
         [cmd, subcmd] if cmd == "client" && subcmd == "build" => client_build(),
         [cmd, subcmd] if cmd == "godot" && subcmd == "run" => godot_run(),
         [cmd, subcmd] if cmd == "smoke" && subcmd == "two-clients" => smoke_two_clients(),
@@ -81,6 +88,11 @@ Commands:
                 Describe the durable test database schema
   test-server publish {TEST_CONFIRM_FLAG}
                 Publish to durable test database {TEST_DB_NAME} without deleting data
+  agent run [--name NAME] [--profile PROFILE] [--server-uri URI] [--database NAME] [--port PORT]
+                Launch an agent Godot client in the foreground, defaulting to {TEST_DB_NAME}
+  agent spawn [--name NAME] [--profile PROFILE] [--server-uri URI] [--database NAME] [--port PORT]
+                Launch an agent Godot client in the background and print its registry entry
+  agent list    List Tiny Grove loopback registry entries and stream URLs
   client build  Build and stage the Godot Rust extension
   godot run     Launch the Godot project
   smoke two-clients
@@ -301,6 +313,326 @@ fn sign_client_library(target: &Path) -> Result<(), String> {
 
 fn godot_run() -> Result<(), String> {
     exec("godot", ["--path", "godot"], repo_dir())
+}
+
+#[derive(Debug)]
+struct AgentOptions {
+    name: String,
+    profile: String,
+    server_uri: String,
+    database_name: String,
+    port: Option<String>,
+}
+
+fn agent_run(args: &[String]) -> Result<(), String> {
+    let options = AgentOptions::parse(args)?;
+    print_agent_launch_summary(&options, false);
+    exec_agent_godot(&options)
+}
+
+fn agent_spawn(args: &[String]) -> Result<(), String> {
+    let options = AgentOptions::parse(args)?;
+    fs::create_dir_all(agent_log_dir())
+        .map_err(|error| format!("failed to create agent log directory: {error}"))?;
+    let log_path = agent_log_path(&options);
+    let log = fs::File::create(&log_path)
+        .map_err(|error| format!("failed to create {}: {error}", log_path.display()))?;
+    let err_log = log
+        .try_clone()
+        .map_err(|error| format!("failed to clone {}: {error}", log_path.display()))?;
+
+    print_agent_launch_summary(&options, true);
+    let mut command = agent_command(&options);
+    command.stdout(Stdio::from(log));
+    command.stderr(Stdio::from(err_log));
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn Godot agent client: {error}"))?;
+
+    println!("  pid:       {}", child.id());
+    println!("  log:       {}", log_path.display());
+    println!("  registry:  {}", agent_registry_dir().display());
+    wait_for_agent_registry(&options)
+}
+
+fn agent_list() -> Result<(), String> {
+    let entries = read_agent_registry_entries()?;
+    if entries.is_empty() {
+        println!(
+            "no Tiny Grove agent registry entries found in {}",
+            agent_registry_dir().display()
+        );
+        return Ok(());
+    }
+
+    println!("Tiny Grove agent registry entries:");
+    for entry in entries {
+        let profile = json_str(&entry, "profile").unwrap_or("?");
+        let display_name = json_str(&entry, "display_name").unwrap_or("");
+        let agent_name = json_str(&entry, "agent_name").unwrap_or("");
+        let name = if !display_name.is_empty() {
+            display_name
+        } else if !agent_name.is_empty() {
+            agent_name
+        } else {
+            "?"
+        };
+        let db = json_str(&entry, "database_name").unwrap_or("?");
+        let server = json_str(&entry, "server_uri").unwrap_or("?");
+        let base_url = json_str(&entry, "base_url").unwrap_or("?");
+        let stream_url = stream_url_for(&entry);
+        let stream_name = watch_stream_name_for(&entry);
+        let connected = entry
+            .get("connected")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        println!("- {name} profile={profile} connected={connected} db={db} server={server}");
+        println!("  base_url:        {base_url}");
+        println!(
+            "  watch stream:    {}",
+            stream_name.unwrap_or_else(|| "?".to_string())
+        );
+        println!(
+            "  stream_url:      {}",
+            stream_url.unwrap_or_else(|| "?".to_string())
+        );
+    }
+    Ok(())
+}
+
+impl AgentOptions {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut options = Self {
+            name: DEFAULT_AGENT_NAME.to_string(),
+            profile: DEFAULT_AGENT_PROFILE.to_string(),
+            server_uri: DEFAULT_AGENT_SERVER_URI.to_string(),
+            database_name: TEST_DB_NAME.to_string(),
+            port: None,
+        };
+
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--name" => {
+                    options.name = value_arg(args, &mut index, "--name")?;
+                }
+                "--profile" => {
+                    options.profile = value_arg(args, &mut index, "--profile")?;
+                }
+                "--server-uri" => {
+                    options.server_uri = value_arg(args, &mut index, "--server-uri")?;
+                }
+                "--database" | "--db" => {
+                    let flag = args[index].clone();
+                    options.database_name = value_arg(args, &mut index, &flag)?;
+                }
+                "--port" => {
+                    options.port = Some(value_arg(args, &mut index, "--port")?);
+                }
+                "--local-dev" => {
+                    options.database_name = DB_NAME.to_string();
+                }
+                "--test-server" => {
+                    options.database_name = TEST_DB_NAME.to_string();
+                }
+                "--help" | "-h" => {
+                    return Err(agent_usage());
+                }
+                other => {
+                    return Err(format!(
+                        "unknown agent option `{other}`\n\n{}",
+                        agent_usage()
+                    ));
+                }
+            }
+            index += 1;
+        }
+
+        Ok(options)
+    }
+}
+
+fn value_arg(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+    let value = args
+        .get(*index + 1)
+        .ok_or_else(|| format!("{flag} requires a value"))?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err(format!("{flag} requires a non-empty value"));
+    }
+    *index += 1;
+    Ok(value)
+}
+
+fn agent_usage() -> String {
+    format!(
+        "Usage: cargo xtask agent run|spawn [--name NAME] [--profile PROFILE] [--server-uri URI] [--database NAME] [--port PORT]\nDefaults: --name {DEFAULT_AGENT_NAME} --profile {DEFAULT_AGENT_PROFILE} --server-uri {DEFAULT_AGENT_SERVER_URI} --database {TEST_DB_NAME}"
+    )
+}
+
+fn print_agent_launch_summary(options: &AgentOptions, background: bool) {
+    println!("launching Tiny Grove agent client");
+    println!("  name:      {}", options.name);
+    println!("  profile:   {}", options.profile);
+    println!("  server:    {}", options.server_uri);
+    println!("  database:  {}", options.database_name);
+    println!(
+        "  port:      {}",
+        options.port.as_deref().unwrap_or("auto-scan from 37373")
+    );
+    println!(
+        "  mode:      {}",
+        if background {
+            "background"
+        } else {
+            "foreground"
+        }
+    );
+}
+
+fn agent_command(options: &AgentOptions) -> Command {
+    let mut command = Command::new("godot");
+    command
+        .arg("--path")
+        .arg("godot")
+        .current_dir(repo_dir())
+        .env("TINYGROVE_AGENT_PROFILE", &options.profile)
+        .env("TINYGROVE_AGENT_NAME", &options.name)
+        .env("TINYGROVE_SERVER_URI", &options.server_uri)
+        .env("TINYGROVE_DATABASE_NAME", &options.database_name);
+    if let Some(port) = &options.port {
+        command.env("TINYGROVE_AGENT_PORT", port);
+    }
+    command
+}
+
+fn exec_agent_godot(options: &AgentOptions) -> Result<(), String> {
+    let error = agent_command(options).exec();
+    Err(format!("failed to exec Godot agent client: {error}"))
+}
+
+fn wait_for_agent_registry(options: &AgentOptions) -> Result<(), String> {
+    for _ in 0..30 {
+        if let Some(entry) = find_agent_registry_entry(options)? {
+            let base_url = json_str(&entry, "base_url").unwrap_or("?");
+            let stream_url = stream_url_for(&entry).unwrap_or_else(|| "?".to_string());
+            let stream_name = watch_stream_name_for(&entry).unwrap_or_else(|| "?".to_string());
+            let connected = entry
+                .get("connected")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            println!("  base_url:  {base_url}");
+            println!("  stream:    {stream_name}");
+            println!("  sse url:   {stream_url}");
+            println!("  connected: {connected}");
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    println!(
+        "agent client was spawned, but no matching registry entry appeared yet; run `cargo xtask agent list` after Godot finishes booting"
+    );
+    Ok(())
+}
+
+fn find_agent_registry_entry(options: &AgentOptions) -> Result<Option<serde_json::Value>, String> {
+    let mut matches = read_agent_registry_entries()?
+        .into_iter()
+        .filter(|entry| json_str(entry, "profile") == Some(options.profile.as_str()))
+        .filter(|entry| json_str(entry, "database_name") == Some(options.database_name.as_str()))
+        .filter(|entry| {
+            json_str(entry, "agent_name") == Some(options.name.as_str())
+                || json_str(entry, "display_name") == Some(options.name.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by(|left, right| {
+        let left_time = left
+            .get("updated_unix")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        let right_time = right
+            .get("updated_unix")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        right_time
+            .partial_cmp(&left_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(matches.into_iter().next())
+}
+
+fn read_agent_registry_entries() -> Result<Vec<serde_json::Value>, String> {
+    let dir = agent_registry_dir();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for item in
+        fs::read_dir(&dir).map_err(|error| format!("failed to read {}: {error}", dir.display()))?
+    {
+        let path = item
+            .map_err(|error| format!("failed to read {} entry: {error}", dir.display()))?
+            .path();
+        if path.extension().and_then(OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => entries.push(value),
+            Err(error) => eprintln!("warning: skipped {}: {error}", path.display()),
+        }
+    }
+    Ok(entries)
+}
+
+fn json_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn stream_url_for(value: &serde_json::Value) -> Option<String> {
+    json_str(value, "stream_url")
+        .map(str::to_string)
+        .or_else(|| {
+            json_str(value, "base_url").map(|base_url| format!("{base_url}/stream?waking=true"))
+        })
+}
+
+fn watch_stream_name_for(value: &serde_json::Value) -> Option<String> {
+    json_str(value, "watch_stream_name")
+        .map(str::to_string)
+        .or_else(|| {
+            let profile = json_str(value, "profile")?;
+            let port = value.get("port")?.as_i64()?;
+            Some(format!("tinygrove:{profile}:{port}"))
+        })
+}
+
+fn agent_registry_dir() -> PathBuf {
+    repo_dir().join(".tinygrove").join("agents")
+}
+
+fn agent_log_dir() -> PathBuf {
+    repo_dir().join(".tinygrove").join("logs")
+}
+
+fn agent_log_path(options: &AgentOptions) -> PathBuf {
+    let safe_name = options
+        .name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    agent_log_dir().join(format!("agent-{safe_name}.log"))
 }
 
 fn smoke_two_clients() -> Result<(), String> {
